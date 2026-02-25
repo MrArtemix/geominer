@@ -1,0 +1,98 @@
+# =========================
+# Ge O'Miner - GeoSmart Africa
+# =========================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+venv/
+.venv/
+ENV/
+env/
+*.whl
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+.vercel
+
+# ML Models & Data (volumineux)
+*.pt
+*.pth
+*.onnx
+*.h5
+*.pkl
+*.joblib
+ml/models/*.bin
+ml/datasets/*.tif
+ml/datasets/*.zip
+ml/datasets/*.tar.gz
+backend/minespotai-svc/src/models/weights/*.pt
+backend/minespotai-svc/src/models/weights/*.pth
+mlruns/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Secrets & Environment
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+credentials/
+
+# Docker volumes
+infra/docker/data/
+infra/docker/volumes/
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Blockchain crypto materials
+blockchain/network/crypto-config/
+blockchain/network/channel-artifacts/
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+.nyc_output/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# OS
+Thumbs.db
+.Spotlight-V100
+.Trashes

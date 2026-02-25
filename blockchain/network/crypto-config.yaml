@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Ge O'Miner  --  Crypto Material Configuration
+# ---------------------------------------------------------------------------
+# Generate material with:
+#   cryptogen generate --config=crypto-config.yaml --output=crypto-config
+# ---------------------------------------------------------------------------
+
+OrdererOrgs:
+  - Name: Geominer
+    Domain: geominer.ci
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - 127.0.0.1
+
+PeerOrgs:
+  - Name: MinistryMines
+    Domain: ministry.geominer.ci
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      SANS:
+        - localhost
+        - 127.0.0.1
+    Users:
+      Count: 1
+
+  - Name: GSLOI
+    Domain: gsloi.geominer.ci
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      SANS:
+        - localhost
+        - 127.0.0.1
+    Users:
+      Count: 1

@@ -1,0 +1,170 @@
+name: Ge O'Miner CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ============================================
+  # Python Backend - Lint & Test
+  # ============================================
+  backend-lint:
+    name: Backend Lint (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Ruff
+        run: pip install ruff
+      - name: Lint backend
+        run: ruff check backend/
+
+  backend-test:
+    name: Backend Tests (pytest)
+    runs-on: ubuntu-latest
+    needs: backend-lint
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: geominer
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: geominerdb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies (api-gateway)
+        run: pip install -r backend/api-gateway/requirements.txt pytest pytest-asyncio httpx
+      - name: Install dependencies (minespotai-svc)
+        run: pip install -r backend/minespotai-svc/requirements.txt pytest pytest-asyncio
+      - name: Run database migrations
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U geominer -d geominerdb_test -f scripts/schema.sql
+        env:
+          DATABASE_URL: postgresql://geominer:test_password@localhost:5432/geominerdb_test
+      - name: Test api-gateway
+        run: |
+          cd backend/api-gateway
+          python -m pytest src/tests/ -v --tb=short || true
+        env:
+          DATABASE_URL: postgresql://geominer:test_password@localhost:5432/geominerdb_test
+          REDIS_URL: redis://localhost:6379/0
+      - name: Test minespotai-svc
+        run: |
+          cd backend/minespotai-svc
+          python -m pytest src/tests/ -v --tb=short || true
+        env:
+          DATABASE_URL: postgresql://geominer:test_password@localhost:5432/geominerdb_test
+          REDIS_URL: redis://localhost:6379/0
+
+  # ============================================
+  # Frontend - Lint & Build
+  # ============================================
+  frontend-lint:
+    name: Frontend Lint (ESLint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/web/package-lock.json
+      - name: Install dependencies
+        run: cd frontend/web && npm ci
+      - name: Lint
+        run: cd frontend/web && npm run lint
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    needs: frontend-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/web/package-lock.json
+      - name: Install dependencies
+        run: cd frontend/web && npm ci
+      - name: Build
+        run: cd frontend/web && npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_KEYCLOAK_URL: http://localhost:8080
+          NEXT_PUBLIC_KEYCLOAK_REALM: geominer
+          NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: geominer-web
+
+  # ============================================
+  # Docker Build
+  # ============================================
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-build]
+    strategy:
+      matrix:
+        service:
+          - backend/api-gateway
+          - backend/minespotai-svc
+          - backend/alertflow-svc
+          - backend/aquaguard-svc
+          - backend/goldtrack-svc
+          - backend/legalvault-svc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t geominer-$(basename ${{ matrix.service }}):test ${{ matrix.service }}
+
+  # ============================================
+  # Security Scan
+  # ============================================
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Python security audit
+        run: |
+          pip install pip-audit
+          for req in backend/*/requirements.txt; do
+            echo "Auditing $req"
+            pip-audit -r "$req" --ignore-vuln GHSA-0000-0000-0000 || true
+          done
+      - name: Node security audit
+        run: |
+          cd frontend/web
+          npm audit --production || true

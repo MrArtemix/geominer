@@ -1,0 +1,165 @@
+# ---------------------------------------------------------------------------
+# Ge O'Miner  --  Channel Configuration (configtx.yaml)
+# ---------------------------------------------------------------------------
+
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: ../crypto-config/ordererOrganizations/geominer.ci/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer.geominer.ci:7050
+
+  - &MinistryMines
+    Name: MinistryMinesMSP
+    ID: MinistryMinesMSP
+    MSPDir: ../crypto-config/peerOrganizations/ministry.geominer.ci/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('MinistryMinesMSP.admin', 'MinistryMinesMSP.peer', 'MinistryMinesMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('MinistryMinesMSP.admin', 'MinistryMinesMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('MinistryMinesMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('MinistryMinesMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.ministry.geominer.ci
+        Port: 7051
+
+  - &GSLOI
+    Name: GSLOISMSP
+    ID: GSLOISMSP
+    MSPDir: ../crypto-config/peerOrganizations/gsloi.geominer.ci/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('GSLOISMSP.admin', 'GSLOISMSP.peer', 'GSLOISMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('GSLOISMSP.admin', 'GSLOISMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('GSLOISMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('GSLOISMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.gsloi.geominer.ci
+        Port: 9051
+
+# ---------------------------------------------------------------------------
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+# ---------------------------------------------------------------------------
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+# ---------------------------------------------------------------------------
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer.geominer.ci:7050
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.geominer.ci
+        Port: 7050
+        ClientTLSCert: ../crypto-config/ordererOrganizations/geominer.ci/orderers/orderer.geominer.ci/tls/server.crt
+        ServerTLSCert: ../crypto-config/ordererOrganizations/geominer.ci/orderers/orderer.geominer.ci/tls/server.crt
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+  Capabilities:
+    <<: *OrdererCapabilities
+
+# ---------------------------------------------------------------------------
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+# ---------------------------------------------------------------------------
+Profiles:
+  GeominerOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *MinistryMines
+        - *GSLOI
+
+  GeominerChannel:
+    <<: *ChannelDefaults
+    Consortium: GeominerConsortium
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *MinistryMines
+        - *GSLOI

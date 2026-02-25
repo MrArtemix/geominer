@@ -1,0 +1,222 @@
+# ---------------------------------------------------------------------------
+# Ge O'Miner  --  Hyperledger Fabric 2.5 Test Network
+# ---------------------------------------------------------------------------
+# Services:
+#   orderer.geominer.ci          EtcdRaft orderer
+#   peer0.ministry.geominer.ci   MinistryMines org peer + CouchDB
+#   peer0.gsloi.geominer.ci      GSLOI org peer + CouchDB
+#   ca.ministry.geominer.ci      CA for MinistryMines
+#   ca.gsloi.geominer.ci         CA for GSLOI
+# ---------------------------------------------------------------------------
+
+version: "3.8"
+
+networks:
+  fabric-net:
+    name: fabric-net
+    driver: bridge
+
+volumes:
+  orderer.geominer.ci:
+  peer0.ministry.geominer.ci:
+  peer0.gsloi.geominer.ci:
+  couchdb0.ministry:
+  couchdb0.gsloi:
+
+services:
+  # -------------------------------------------------------------------------
+  # Orderer
+  # -------------------------------------------------------------------------
+  orderer.geominer.ci:
+    image: hyperledger/fabric-orderer:2.5
+    container_name: orderer.geominer.ci
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
+      - ORDERER_GENERAL_LISTENPORT=7050
+      - ORDERER_GENERAL_LOCALMSPID=OrdererMSP
+      - ORDERER_GENERAL_LOCALMSPDIR=/var/hyperledger/orderer/msp
+      - ORDERER_GENERAL_TLS_ENABLED=true
+      - ORDERER_GENERAL_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_GENERAL_CLUSTER_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_GENERAL_BOOTSTRAPMETHOD=none
+      - ORDERER_CHANNELPARTICIPATION_ENABLED=true
+      - ORDERER_ADMIN_TLS_ENABLED=true
+      - ORDERER_ADMIN_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt
+      - ORDERER_ADMIN_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key
+      - ORDERER_ADMIN_TLS_CLIENTROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]
+      - ORDERER_ADMIN_LISTENADDRESS=0.0.0.0:7053
+    working_dir: /root
+    command: orderer
+    ports:
+      - "7050:7050"
+      - "7053:7053"
+    volumes:
+      - ../channel-artifacts/genesis.block:/var/hyperledger/orderer/orderer.genesis.block
+      - ../crypto-config/ordererOrganizations/geominer.ci/orderers/orderer.geominer.ci/msp:/var/hyperledger/orderer/msp
+      - ../crypto-config/ordererOrganizations/geominer.ci/orderers/orderer.geominer.ci/tls:/var/hyperledger/orderer/tls
+      - orderer.geominer.ci:/var/hyperledger/production/orderer
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # CouchDB -- MinistryMines
+  # -------------------------------------------------------------------------
+  couchdb0.ministry:
+    image: couchdb:3.3
+    container_name: couchdb0.ministry
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - "5984:5984"
+    volumes:
+      - couchdb0.ministry:/opt/couchdb/data
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # Peer0 -- MinistryMines
+  # -------------------------------------------------------------------------
+  peer0.ministry.geominer.ci:
+    image: hyperledger/fabric-peer:2.5
+    container_name: peer0.ministry.geominer.ci
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric-net
+      - CORE_PEER_ID=peer0.ministry.geominer.ci
+      - CORE_PEER_ADDRESS=peer0.ministry.geominer.ci:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.ministry.geominer.ci:7052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ministry.geominer.ci:7051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ministry.geominer.ci:7051
+      - CORE_PEER_LOCALMSPID=MinistryMinesMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      # CouchDB
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb0.ministry:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+    working_dir: /etc/hyperledger/fabric/peer
+    command: peer node start
+    ports:
+      - "7051:7051"
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ../crypto-config/peerOrganizations/ministry.geominer.ci/peers/peer0.ministry.geominer.ci/msp:/etc/hyperledger/fabric/msp
+      - ../crypto-config/peerOrganizations/ministry.geominer.ci/peers/peer0.ministry.geominer.ci/tls:/etc/hyperledger/fabric/tls
+      - peer0.ministry.geominer.ci:/var/hyperledger/production
+    depends_on:
+      - couchdb0.ministry
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # CouchDB -- GSLOI
+  # -------------------------------------------------------------------------
+  couchdb0.gsloi:
+    image: couchdb:3.3
+    container_name: couchdb0.gsloi
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=adminpw
+    ports:
+      - "6984:5984"
+    volumes:
+      - couchdb0.gsloi:/opt/couchdb/data
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # Peer0 -- GSLOI
+  # -------------------------------------------------------------------------
+  peer0.gsloi.geominer.ci:
+    image: hyperledger/fabric-peer:2.5
+    container_name: peer0.gsloi.geominer.ci
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric-net
+      - CORE_PEER_ID=peer0.gsloi.geominer.ci
+      - CORE_PEER_ADDRESS=peer0.gsloi.geominer.ci:9051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:9051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.gsloi.geominer.ci:9052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:9052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.gsloi.geominer.ci:9051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.gsloi.geominer.ci:9051
+      - CORE_PEER_LOCALMSPID=GSLOISMSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      # CouchDB
+      - CORE_LEDGER_STATE_STATEDATABASE=CouchDB
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS=couchdb0.gsloi:5984
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME=admin
+      - CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD=adminpw
+    working_dir: /etc/hyperledger/fabric/peer
+    command: peer node start
+    ports:
+      - "9051:9051"
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - ../crypto-config/peerOrganizations/gsloi.geominer.ci/peers/peer0.gsloi.geominer.ci/msp:/etc/hyperledger/fabric/msp
+      - ../crypto-config/peerOrganizations/gsloi.geominer.ci/peers/peer0.gsloi.geominer.ci/tls:/etc/hyperledger/fabric/tls
+      - peer0.gsloi.geominer.ci:/var/hyperledger/production
+    depends_on:
+      - couchdb0.gsloi
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # CA -- MinistryMines
+  # -------------------------------------------------------------------------
+  ca.ministry.geominer.ci:
+    image: hyperledger/fabric-ca:1.5
+    container_name: ca.ministry.geominer.ci
+    environment:
+      - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
+      - FABRIC_CA_SERVER_CA_NAME=ca-ministry
+      - FABRIC_CA_SERVER_TLS_ENABLED=true
+      - FABRIC_CA_SERVER_PORT=7054
+      - FABRIC_CA_SERVER_OPERATIONS_LISTENADDRESS=0.0.0.0:17054
+    ports:
+      - "7054:7054"
+      - "17054:17054"
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes:
+      - ../crypto-config/peerOrganizations/ministry.geominer.ci/ca/:/etc/hyperledger/fabric-ca-server
+    networks:
+      - fabric-net
+
+  # -------------------------------------------------------------------------
+  # CA -- GSLOI
+  # -------------------------------------------------------------------------
+  ca.gsloi.geominer.ci:
+    image: hyperledger/fabric-ca:1.5
+    container_name: ca.gsloi.geominer.ci
+    environment:
+      - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
+      - FABRIC_CA_SERVER_CA_NAME=ca-gsloi
+      - FABRIC_CA_SERVER_TLS_ENABLED=true
+      - FABRIC_CA_SERVER_PORT=8054
+      - FABRIC_CA_SERVER_OPERATIONS_LISTENADDRESS=0.0.0.0:18054
+    ports:
+      - "8054:8054"
+      - "18054:18054"
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes:
+      - ../crypto-config/peerOrganizations/gsloi.geominer.ci/ca/:/etc/hyperledger/fabric-ca-server
+    networks:
+      - fabric-net

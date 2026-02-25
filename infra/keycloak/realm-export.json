@@ -1,0 +1,186 @@
+{
+  "id": "geominer",
+  "realm": "geominer",
+  "displayName": "Ge O'Miner - GeoSmart Africa",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "roles": {
+    "realm": [
+      {
+        "name": "SUPER_ADMIN",
+        "description": "Administrateur systeme avec acces total"
+      },
+      {
+        "name": "ADMIN_MINES",
+        "description": "Administrateur du Ministere des Mines"
+      },
+      {
+        "name": "ANALYSTE_SIG",
+        "description": "Analyste SIG - interpretation imagerie satellite"
+      },
+      {
+        "name": "OFFICIER_GSLOI",
+        "description": "Officier du GSLOI - operations terrain"
+      },
+      {
+        "name": "AGENT_TERRAIN",
+        "description": "Agent de terrain - collecte donnees"
+      },
+      {
+        "name": "INSPECTEUR_MINES",
+        "description": "Inspecteur des mines - verification conformite"
+      },
+      {
+        "name": "ONG_AUDITEUR",
+        "description": "ONG auditeur - acces lecture seule"
+      },
+      {
+        "name": "API_PARTENAIRE",
+        "description": "Partenaire API - acces programme limite"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "geominer-web",
+      "name": "Ge O'Miner Web Application",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "https://geominer.ci/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "https://geominer.ci"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*##https://geominer.ci/*"
+      },
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles"
+      ]
+    },
+    {
+      "clientId": "geominer-api",
+      "name": "Ge O'Miner API Backend",
+      "enabled": true,
+      "publicClient": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "change-me-in-production",
+      "attributes": {
+        "access.token.lifespan": "900"
+      },
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@geominer.ci",
+      "email": "admin@geominer.ci",
+      "firstName": "Kouame",
+      "lastName": "Affoue",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["SUPER_ADMIN"]
+    },
+    {
+      "username": "analyste@geominer.ci",
+      "email": "analyste@geominer.ci",
+      "firstName": "Traore",
+      "lastName": "Ibrahim",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyste123",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["ANALYSTE_SIG"]
+    },
+    {
+      "username": "officier@geominer.ci",
+      "email": "officier@geominer.ci",
+      "firstName": "Coulibaly",
+      "lastName": "Seydou",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "officier123",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["OFFICIER_GSLOI"]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "roles",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "multivalued": "true",
+            "claim.name": "realm_roles",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "passwordPolicy": "length(8) and upperCase(1) and lowerCase(1) and digits(1)"
+}
