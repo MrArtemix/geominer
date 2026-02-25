@@ -12,12 +12,12 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.main import get_db, get_minio_client, settings
-from src.core.hasher import compute_sha256, compute_sha256_stream, verify_hash
+from src.core.hasher import compute_sha256, verify_hash
 from src.core.ipfs_client import generate_cid
 
 logger = structlog.get_logger("legalvault.evidence")

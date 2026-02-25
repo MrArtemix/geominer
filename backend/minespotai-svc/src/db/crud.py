@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 

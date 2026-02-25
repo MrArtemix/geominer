@@ -5,11 +5,9 @@ from sqlalchemy.orm import Session
 
 from ...db import crud
 from ...db.schemas.site import (
-    BBoxQuery,
     SiteCreate,
     SiteFeature,
     SiteFeatureCollection,
-    SiteResponse,
     SiteStatusUpdate,
 )
 from ...db.session import get_db

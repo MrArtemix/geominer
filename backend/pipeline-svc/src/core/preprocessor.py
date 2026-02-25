@@ -7,7 +7,7 @@ spectral index computation, band stacking, and tiling.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 from scipy.ndimage import uniform_filter

@@ -36,7 +36,6 @@ Example future implementation:
             return response.json()["Hash"]  # This is the real CID
 """
 
-import hashlib
 import base64
 
 

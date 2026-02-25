@@ -8,10 +8,9 @@ vectorising predictions, storing results, and triggering alerts.
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import httpx
 import numpy as np
@@ -169,7 +168,6 @@ def compute_indices(processed_path: str) -> str:
     with rasterio.open(processed_path) as src:
         data = src.read().astype(np.float32)  # (9, H, W)
         profile = src.profile.copy()
-        transform = src.transform
 
     # Band indices within the 9-band raster
     B2, B3, B4, B8 = data[0], data[1], data[2], data[3]
@@ -179,7 +177,6 @@ def compute_indices(processed_path: str) -> str:
     ndvi = (B8 - B4) / (B8 + B4 + eps)
     ndwi = (B3 - B8) / (B3 + B8 + eps)
     bsi = ((B11 + B4) - (B8 + B2)) / ((B11 + B4) + (B8 + B2) + eps)
-    nbi = (B11 * B4) / (B8 + eps)
 
     # Stack: 9 original bands + NDVI, NDWI, BSI = 12 channels
     # Model expects: [B2,B3,B4,B8,B8A,B11,B12, VV,VH, NDVI,NDWI,BSI]
