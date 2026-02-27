@@ -1,9 +1,8 @@
 """
-AquaGuard IoT Service - FastAPI application.
+AquaGuard IoT Service - Application FastAPI.
 
-Ingests water-quality telemetry from MQTT-connected sensors, persists
-readings to PostgreSQL, and raises alerts via Redis Streams when OMS
-thresholds are breached.
+Ingestion de telemetrie qualite de l'eau via MQTT, persistance
+dans TimescaleDB (hypertable), et alertes via alertflow-svc.
 """
 
 from __future__ import annotations
@@ -16,36 +15,38 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.ingestor import start_mqtt_subscriber
-from src.routes.sensors import router as sensors_router
+from .ingestor import start_mqtt_subscriber
+from .routes.sensors import router as sensors_router
 
 log = structlog.get_logger()
+
+APP_NAME = "AquaGuard IoT Service"
+APP_VERSION = "0.1.0"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown lifecycle hook."""
-    log.info("aquaguard_svc.starting")
+    """Demarrage / arret du service."""
+    log.info("aquaguard_svc.demarrage", version=APP_VERSION)
 
-    # Launch the MQTT subscriber in a daemon thread so it does not
-    # block the async event loop.
+    # Lancer le souscripteur MQTT dans un thread daemon
     mqtt_thread = threading.Thread(
         target=start_mqtt_subscriber,
         name="mqtt-subscriber",
         daemon=True,
     )
     mqtt_thread.start()
-    log.info("aquaguard_svc.mqtt_thread_started")
+    log.info("aquaguard_svc.mqtt_thread_demarre")
 
-    yield  # application is running
+    yield
 
-    log.info("aquaguard_svc.shutting_down")
+    log.info("aquaguard_svc.arret")
 
 
 app = FastAPI(
-    title="AquaGuard IoT Service",
-    description="Water-quality sensor ingestion and alerting micro-service.",
-    version="0.1.0",
+    title=APP_NAME,
+    description="Service d'ingestion IoT capteurs qualite de l'eau.",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -57,25 +58,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+# Routes capteurs
 app.include_router(sensors_router)
 
 
 @app.get("/health", tags=["health"])
 async def health():
-    """Liveness / readiness probe."""
-    return {"status": "ok", "service": "aquaguard-svc"}
+    """Healthcheck du service AquaGuard."""
+    return {"status": "healthy", "service": "aquaguard-svc", "version": APP_VERSION}
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
+@app.get("/ready", tags=["health"])
+async def ready():
+    return {"status": "ready"}
+
+
 if __name__ == "__main__":
-    uvicorn.run(
-        "src.main:app",
-        host="0.0.0.0",
-        port=8003,
-        reload=True,
-    )
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8005, reload=True)

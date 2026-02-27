@@ -1,14 +1,16 @@
 """
-Blockchain routes - register sites and record gold transactions on-chain.
+Routes blockchain GoldTrack enrichies.
 
-This is a placeholder implementation that simulates blockchain interactions
-by storing transaction IDs in the gold_transactions table in PostgreSQL.
+Mode mock avec SHA-256 txid, ou futur connecteur Hyperledger Fabric.
+Ajout: historique site, mise a jour statut, score de divergence H3.
 """
 
-import uuid
+from __future__ import annotations
+
 import hashlib
+import json
+import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from src.main import get_db
+from src.main import get_db, settings
 
 logger = structlog.get_logger("goldtrack.blockchain")
 
@@ -24,15 +26,15 @@ router = APIRouter(prefix="/blockchain", tags=["blockchain"])
 
 
 # ---------------------------------------------------------------------------
-# Pydantic schemas
+# Schemas Pydantic
 # ---------------------------------------------------------------------------
 
 class SiteRegistrationRequest(BaseModel):
-    site_id: uuid.UUID = Field(..., description="Mining site UUID to register on chain")
-    site_name: str = Field(..., description="Human-readable site name")
+    site_id: uuid.UUID = Field(..., description="UUID du site minier")
+    site_name: str = Field(..., description="Nom du site")
     latitude: float
     longitude: float
-    registered_by: Optional[str] = None
+    registered_by: str | None = None
 
 
 class SiteRegistrationResponse(BaseModel):
@@ -40,15 +42,17 @@ class SiteRegistrationResponse(BaseModel):
     blockchain_txid: str
     registered_at: datetime
     status: str
+    mock_mode: bool = True
 
 
 class TransactionCreateRequest(BaseModel):
-    site_id: uuid.UUID = Field(..., description="Origin mining site")
-    from_entity: str = Field(..., description="Seller / source entity")
-    to_entity: str = Field(..., description="Buyer / destination entity")
-    quantity_grams: float = Field(..., gt=0, description="Gold quantity in grams")
-    is_legal: bool = Field(True, description="Whether the transaction is from a legal source")
-    metadata: Optional[dict] = None
+    site_id: uuid.UUID = Field(..., description="Site d'origine")
+    from_entity: str = Field(..., description="Entite emettrice")
+    to_entity: str = Field(..., description="Entite destinataire")
+    quantity_grams: float = Field(..., gt=0, description="Quantite en grammes")
+    is_legal: bool = Field(True, description="Transaction legale")
+    h3_index: str | None = Field(None, description="Cellule H3 de la zone")
+    metadata: dict | None = None
 
 
 class TransactionResponse(BaseModel):
@@ -59,8 +63,22 @@ class TransactionResponse(BaseModel):
     to_entity: str
     quantity_grams: float
     is_legal: bool
-    metadata: Optional[dict]
+    metadata: dict | None
     created_at: datetime
+
+
+class StatusUpdateRequest(BaseModel):
+    status: str = Field(..., description="Nouveau statut")
+    updated_by: str = Field("system", description="Auteur de la mise a jour")
+    notes: str | None = None
+
+
+class DivergenceResponse(BaseModel):
+    h3_index: str
+    total_legal_grams: float
+    total_illegal_grams: float
+    divergence_score: float
+    transaction_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -68,41 +86,43 @@ class TransactionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _generate_blockchain_txid(payload: str) -> str:
-    """
-    Generate a deterministic, fake blockchain transaction ID.
-
-    In production this would submit a real transaction to the chain and
-    return the resulting txid.  Here we simply SHA-256-hash the payload
-    and prefix it with '0x' to mimic an Ethereum-style txid.
-    """
+    """Generer un txid mock (SHA-256) simulant une transaction blockchain."""
     digest = hashlib.sha256(payload.encode()).hexdigest()
     return f"0x{digest}"
 
 
+def _parse_metadata(row_metadata) -> dict | None:
+    """Parser le champ metadata d'une ligne DB."""
+    if isinstance(row_metadata, dict):
+        return row_metadata
+    if isinstance(row_metadata, str):
+        try:
+            return json.loads(row_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Site registration
+# Enregistrement de site
 # ---------------------------------------------------------------------------
 
 @router.post("/sites", response_model=SiteRegistrationResponse, status_code=201)
 async def register_site(body: SiteRegistrationRequest, db: Session = Depends(get_db)):
-    """Register a mining site on the blockchain (placeholder)."""
-
+    """Enregistrer un site minier sur la blockchain (mock)."""
     payload = f"{body.site_id}:{body.site_name}:{body.latitude}:{body.longitude}:{datetime.now(timezone.utc).isoformat()}"
     txid = _generate_blockchain_txid(payload)
     now = datetime.now(timezone.utc)
 
-    # Store the blockchain reference in gold_transactions as a registration event
     db.execute(
-        text(
-            """
+        text("""
             INSERT INTO gold_transactions
                 (id, site_id, blockchain_txid, from_entity, to_entity,
                  quantity_grams, is_legal, metadata, created_at)
             VALUES
                 (:id, :site_id, :txid, :from_entity, :to_entity,
                  :quantity, :is_legal, :metadata, :created_at)
-            """
-        ),
+        """),
         {
             "id": str(uuid.uuid4()),
             "site_id": str(body.site_id),
@@ -111,91 +131,206 @@ async def register_site(body: SiteRegistrationRequest, db: Session = Depends(get
             "to_entity": "blockchain-registry",
             "quantity": 0,
             "is_legal": True,
-            "metadata": f'{{"type":"site_registration","site_name":"{body.site_name}","lat":{body.latitude},"lng":{body.longitude}}}',
+            "metadata": json.dumps({
+                "type": "site_registration",
+                "site_name": body.site_name,
+                "lat": body.latitude,
+                "lng": body.longitude,
+            }),
             "created_at": now,
         },
     )
+
+    # Mettre a jour le txid sur le site minier
+    db.execute(
+        text("""
+            UPDATE mining_sites
+            SET blockchain_txid = :txid, updated_at = NOW()
+            WHERE id = :site_id
+        """),
+        {"txid": txid, "site_id": str(body.site_id)},
+    )
     db.commit()
 
-    logger.info("site_registered", site_id=str(body.site_id), txid=txid)
+    logger.info("site_enregistre", site_id=str(body.site_id), txid=txid)
 
     return SiteRegistrationResponse(
         site_id=body.site_id,
         blockchain_txid=txid,
         registered_at=now,
         status="confirmed",
+        mock_mode=settings.use_mock_blockchain,
     )
 
 
+# ---------------------------------------------------------------------------
+# Historique blockchain d'un site
+# ---------------------------------------------------------------------------
+
 @router.get("/sites/{site_id}", response_model=list[TransactionResponse])
 async def get_site_blockchain_records(site_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Return all blockchain records associated with a mining site."""
-
+    """Retourner tous les enregistrements blockchain d'un site."""
     rows = db.execute(
-        text(
-            """
+        text("""
             SELECT id, site_id, blockchain_txid, from_entity, to_entity,
                    quantity_grams, is_legal, metadata, created_at
             FROM gold_transactions
             WHERE site_id = :site_id
             ORDER BY created_at DESC
-            """
-        ),
+        """),
         {"site_id": str(site_id)},
     ).fetchall()
 
     if not rows:
-        raise HTTPException(status_code=404, detail=f"No blockchain records found for site {site_id}")
+        raise HTTPException(status_code=404, detail=f"Aucun enregistrement blockchain pour le site {site_id}")
 
-    results = []
-    for r in rows:
-        meta = r.metadata if isinstance(r.metadata, dict) else None
-        results.append(
-            TransactionResponse(
-                id=r.id,
-                site_id=r.site_id,
-                blockchain_txid=r.blockchain_txid,
-                from_entity=r.from_entity,
-                to_entity=r.to_entity,
-                quantity_grams=r.quantity_grams,
-                is_legal=r.is_legal,
-                metadata=meta,
-                created_at=r.created_at,
-            )
+    return [
+        TransactionResponse(
+            id=r.id, site_id=r.site_id, blockchain_txid=r.blockchain_txid,
+            from_entity=r.from_entity, to_entity=r.to_entity,
+            quantity_grams=r.quantity_grams, is_legal=r.is_legal,
+            metadata=_parse_metadata(r.metadata), created_at=r.created_at,
         )
-    return results
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Gold transactions
+# Historique des changements de statut d'un site
+# ---------------------------------------------------------------------------
+
+@router.get("/sites/{site_id}/history")
+async def get_site_status_history(site_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Retourner l'historique des statuts d'un site (depuis status_history JSONB)."""
+    row = db.execute(
+        text("""
+            SELECT site_code, status, status_history
+            FROM mining_sites WHERE id = :site_id
+        """),
+        {"site_id": str(site_id)},
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Site {site_id} non trouve")
+
+    history = row.status_history if isinstance(row.status_history, list) else []
+
+    return {
+        "site_id": str(site_id),
+        "site_code": row.site_code,
+        "current_status": row.status,
+        "history": history,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mise a jour du statut d'un site via blockchain
+# ---------------------------------------------------------------------------
+
+@router.patch("/sites/{site_id}/status")
+async def update_site_blockchain_status(
+    site_id: uuid.UUID,
+    body: StatusUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """Mettre a jour le statut d'un site et enregistrer sur la blockchain."""
+    # Generer un txid pour cette transition
+    payload = f"status:{site_id}:{body.status}:{datetime.now(timezone.utc).isoformat()}"
+    txid = _generate_blockchain_txid(payload)
+    now = datetime.now(timezone.utc)
+
+    # Enregistrer la transaction de changement de statut
+    db.execute(
+        text("""
+            INSERT INTO gold_transactions
+                (id, site_id, blockchain_txid, from_entity, to_entity,
+                 quantity_grams, is_legal, metadata, created_at)
+            VALUES
+                (:id, :site_id, :txid, :from_entity, :to_entity,
+                 0, true, :metadata, :created_at)
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "site_id": str(site_id),
+            "txid": txid,
+            "from_entity": body.updated_by,
+            "to_entity": "status-update",
+            "metadata": json.dumps({
+                "type": "status_update",
+                "new_status": body.status,
+                "notes": body.notes,
+            }),
+            "created_at": now,
+        },
+    )
+
+    # Mettre a jour le site avec historique JSONB
+    history_entry = json.dumps({
+        "status": body.status,
+        "changed_at": now.isoformat(),
+        "changed_by": body.updated_by,
+        "blockchain_txid": txid,
+        "notes": body.notes,
+    })
+
+    result = db.execute(
+        text("""
+            UPDATE mining_sites
+            SET status = :status,
+                blockchain_txid = :txid,
+                status_history = COALESCE(status_history, '[]'::jsonb) || :history_entry::jsonb,
+                updated_at = NOW()
+            WHERE id = :site_id
+            RETURNING id, site_code, status
+        """),
+        {
+            "status": body.status,
+            "txid": txid,
+            "history_entry": history_entry,
+            "site_id": str(site_id),
+        },
+    )
+    db.commit()
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Site {site_id} non trouve")
+
+    logger.info("statut_site_mis_a_jour", site_id=str(site_id), status=body.status, txid=txid)
+
+    return {
+        "site_id": str(site_id),
+        "site_code": row.site_code,
+        "new_status": body.status,
+        "blockchain_txid": txid,
+        "mock_mode": settings.use_mock_blockchain,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Transactions d'or
 # ---------------------------------------------------------------------------
 
 @router.post("/transactions", response_model=TransactionResponse, status_code=201)
 async def create_transaction(body: TransactionCreateRequest, db: Session = Depends(get_db)):
-    """Record a gold transaction on the blockchain (placeholder)."""
-
+    """Enregistrer une transaction d'or sur la blockchain (mock)."""
     tx_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     payload = f"{tx_id}:{body.site_id}:{body.from_entity}:{body.to_entity}:{body.quantity_grams}:{now.isoformat()}"
     txid = _generate_blockchain_txid(payload)
 
-    metadata_json = None
-    if body.metadata:
-        import json
-        metadata_json = json.dumps(body.metadata)
+    metadata_json = json.dumps(body.metadata) if body.metadata else None
 
     db.execute(
-        text(
-            """
+        text("""
             INSERT INTO gold_transactions
                 (id, site_id, blockchain_txid, from_entity, to_entity,
                  quantity_grams, is_legal, metadata, created_at)
             VALUES
                 (:id, :site_id, :txid, :from_entity, :to_entity,
                  :quantity, :is_legal, :metadata, :created_at)
-            """
-        ),
+        """),
         {
             "id": str(tx_id),
             "site_id": str(body.site_id),
@@ -211,12 +346,11 @@ async def create_transaction(body: TransactionCreateRequest, db: Session = Depen
     db.commit()
 
     logger.info(
-        "transaction_recorded",
+        "transaction_enregistree",
         tx_id=str(tx_id),
         site_id=str(body.site_id),
         txid=txid,
         quantity=body.quantity_grams,
-        is_legal=body.is_legal,
     )
 
     return TransactionResponse(
@@ -234,91 +368,108 @@ async def create_transaction(body: TransactionCreateRequest, db: Session = Depen
 
 @router.get("/transactions", response_model=list[TransactionResponse])
 async def list_transactions(
-    is_legal: Optional[bool] = Query(None, description="Filter by legality status"),
-    from_entity: Optional[str] = Query(None, description="Filter by source entity"),
-    to_entity: Optional[str] = Query(None, description="Filter by destination entity"),
+    is_legal: bool | None = Query(None, description="Filtrer par legalite"),
+    from_entity: str | None = Query(None, description="Filtrer par emetteur"),
+    to_entity: str | None = Query(None, description="Filtrer par destinataire"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List gold transactions with optional filters."""
-
+    """Lister les transactions avec filtres optionnels."""
     conditions = []
     params: dict = {"limit": limit, "offset": offset}
 
     if is_legal is not None:
         conditions.append("is_legal = :is_legal")
         params["is_legal"] = is_legal
-
-    if from_entity is not None:
+    if from_entity:
         conditions.append("from_entity = :from_entity")
         params["from_entity"] = from_entity
-
-    if to_entity is not None:
+    if to_entity:
         conditions.append("to_entity = :to_entity")
         params["to_entity"] = to_entity
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-    query = f"""
-        SELECT id, site_id, blockchain_txid, from_entity, to_entity,
-               quantity_grams, is_legal, metadata, created_at
-        FROM gold_transactions
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT :limit OFFSET :offset
-    """
+    rows = db.execute(
+        text(f"""
+            SELECT id, site_id, blockchain_txid, from_entity, to_entity,
+                   quantity_grams, is_legal, metadata, created_at
+            FROM gold_transactions
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        """),
+        params,
+    ).fetchall()
 
-    rows = db.execute(text(query), params).fetchall()
-
-    results = []
-    for r in rows:
-        meta = r.metadata if isinstance(r.metadata, dict) else None
-        results.append(
-            TransactionResponse(
-                id=r.id,
-                site_id=r.site_id,
-                blockchain_txid=r.blockchain_txid,
-                from_entity=r.from_entity,
-                to_entity=r.to_entity,
-                quantity_grams=r.quantity_grams,
-                is_legal=r.is_legal,
-                metadata=meta,
-                created_at=r.created_at,
-            )
+    return [
+        TransactionResponse(
+            id=r.id, site_id=r.site_id, blockchain_txid=r.blockchain_txid,
+            from_entity=r.from_entity, to_entity=r.to_entity,
+            quantity_grams=r.quantity_grams, is_legal=r.is_legal,
+            metadata=_parse_metadata(r.metadata), created_at=r.created_at,
         )
-    return results
+        for r in rows
+    ]
 
 
 @router.get("/transactions/{tx_id}", response_model=TransactionResponse)
 async def get_transaction(tx_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Retrieve a single gold transaction by its ID."""
-
+    """Recuperer une transaction par son ID."""
     row = db.execute(
-        text(
-            """
+        text("""
             SELECT id, site_id, blockchain_txid, from_entity, to_entity,
                    quantity_grams, is_legal, metadata, created_at
-            FROM gold_transactions
-            WHERE id = :tx_id
-            """
-        ),
+            FROM gold_transactions WHERE id = :tx_id
+        """),
         {"tx_id": str(tx_id)},
     ).fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
-
-    meta = row.metadata if isinstance(row.metadata, dict) else None
+        raise HTTPException(status_code=404, detail=f"Transaction {tx_id} non trouvee")
 
     return TransactionResponse(
-        id=row.id,
-        site_id=row.site_id,
-        blockchain_txid=row.blockchain_txid,
-        from_entity=row.from_entity,
-        to_entity=row.to_entity,
-        quantity_grams=row.quantity_grams,
-        is_legal=row.is_legal,
-        metadata=meta,
-        created_at=row.created_at,
+        id=row.id, site_id=row.site_id, blockchain_txid=row.blockchain_txid,
+        from_entity=row.from_entity, to_entity=row.to_entity,
+        quantity_grams=row.quantity_grams, is_legal=row.is_legal,
+        metadata=_parse_metadata(row.metadata), created_at=row.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Score de divergence H3
+# ---------------------------------------------------------------------------
+
+@router.get("/gold/divergence/{h3_index}", response_model=DivergenceResponse)
+async def get_divergence_score(h3_index: str, db: Session = Depends(get_db)):
+    """
+    Calculer le score de divergence pour une zone H3.
+    Score = |legal - illegal| / total.
+    Proche de 0 = zone mixte suspecte, proche de 1 = zone homogene.
+    """
+    row = db.execute(
+        text("""
+            SELECT
+                COALESCE(SUM(CASE WHEN is_legal THEN quantity_grams ELSE 0 END), 0) AS total_legal,
+                COALESCE(SUM(CASE WHEN NOT is_legal THEN quantity_grams ELSE 0 END), 0) AS total_illegal,
+                COUNT(*) AS tx_count
+            FROM gold_transactions gt
+            JOIN mining_sites ms ON gt.site_id = ms.id
+            WHERE ms.h3_index_r7 = :h3_index
+        """),
+        {"h3_index": h3_index},
+    ).fetchone()
+
+    total_legal = float(row.total_legal)
+    total_illegal = float(row.total_illegal)
+    total = total_legal + total_illegal
+    divergence = abs(total_legal - total_illegal) / total if total > 0 else 0.0
+
+    return DivergenceResponse(
+        h3_index=h3_index,
+        total_legal_grams=total_legal,
+        total_illegal_grams=total_illegal,
+        divergence_score=round(divergence, 4),
+        transaction_count=row.tx_count,
     )

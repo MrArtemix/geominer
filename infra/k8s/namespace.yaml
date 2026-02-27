@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: geominer
+  labels:
+    app.kubernetes.io/name: geominer
+    app.kubernetes.io/part-of: geominer-platform
+    environment: production

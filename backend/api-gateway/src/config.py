@@ -1,3 +1,5 @@
+"""Configuration centralisee de l'API Gateway via pydantic-settings."""
+
 from pydantic_settings import BaseSettings
 
 
@@ -16,15 +18,16 @@ class Settings(BaseSettings):
     keycloak_client_id: str = "geominer-api"
     keycloak_client_secret: str = "change-me-in-production"
 
-    # Redis
+    # Redis (cache tokens + streams)
     redis_url: str = "redis://:redis_secret_2024@redis:6379/0"
 
-    # Microservice URLs
+    # URLs des microservices
     minespotai_url: str = "http://minespotai-svc:8001"
-    alertflow_url: str = "http://alertflow-svc:8002"
-    aquaguard_url: str = "http://aquaguard-svc:8003"
+    alertflow_url: str = "http://alertflow-svc:8003"
     goldtrack_url: str = "http://goldtrack-svc:8004"
-    legalvault_url: str = "http://legalvault-svc:8005"
+    aquaguard_url: str = "http://aquaguard-svc:8005"
+    goldpath_url: str = "http://goldpath-svc:8006"
+    legalvault_url: str = "http://legalvault-svc:8007"
 
     # Rate limiting
     rate_limit: str = "100/minute"

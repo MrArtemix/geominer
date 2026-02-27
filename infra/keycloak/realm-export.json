@@ -17,9 +17,9 @@
   "quickLoginCheckMilliSeconds": 1000,
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
-  "accessTokenLifespan": 900,
+  "accessTokenLifespan": 3600,
   "ssoSessionIdleTimeout": 1800,
-  "ssoSessionMaxLifespan": 36000,
+  "ssoSessionMaxLifespan": 86400,
   "roles": {
     "realm": [
       {
@@ -92,13 +92,14 @@
       "name": "Ge O'Miner API Backend",
       "enabled": true,
       "publicClient": false,
+      "bearerOnly": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": false,
       "protocol": "openid-connect",
       "secret": "change-me-in-production",
       "attributes": {
-        "access.token.lifespan": "900"
+        "access.token.lifespan": "3600"
       },
       "defaultClientScopes": [
         "openid",
@@ -119,8 +120,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "admin123",
-          "temporary": true
+          "value": "Demo2026!",
+          "temporary": false
         }
       ],
       "realmRoles": ["SUPER_ADMIN"]
@@ -135,8 +136,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "analyste123",
-          "temporary": true
+          "value": "Demo2026!",
+          "temporary": false
         }
       ],
       "realmRoles": ["ANALYSTE_SIG"]
@@ -151,11 +152,43 @@
       "credentials": [
         {
           "type": "password",
-          "value": "officier123",
-          "temporary": true
+          "value": "Demo2026!",
+          "temporary": false
         }
       ],
       "realmRoles": ["OFFICIER_GSLOI"]
+    },
+    {
+      "username": "mines@geominer.ci",
+      "email": "mines@geominer.ci",
+      "firstName": "Diallo",
+      "lastName": "Fatoumata",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo2026!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["ADMIN_MINES"]
+    },
+    {
+      "username": "agent@geominer.ci",
+      "email": "agent@geominer.ci",
+      "firstName": "Bamba",
+      "lastName": "Moussa",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Demo2026!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["AGENT_TERRAIN"]
     }
   ],
   "clientScopes": [

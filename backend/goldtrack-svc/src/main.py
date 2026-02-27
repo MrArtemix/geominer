@@ -1,27 +1,31 @@
 """
-GoldTrack Service - Blockchain wrapper for gold supply-chain tracking.
+GoldTrack Service - Tracabilite blockchain de l'or.
 
-Provides endpoints for registering mining sites and recording gold transactions
-on a blockchain ledger (placeholder implementation).
+Mode mock (USE_MOCK_BLOCKCHAIN=true) ou connecteur reel Hyperledger Fabric.
+Enregistrement des sites, transactions, historique et score de divergence.
 """
+
+import os
 
 import structlog
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://geominer:geominer_secret_2024@postgres:5432/geominerdb"
+    database_url: str = "postgresql://geominer:geominer2026@postgres:5432/geominerdb"
+    redis_url: str = "redis://:redis_secret_2024@redis:6379/0"
     service_name: str = "goldtrack-svc"
     host: str = "0.0.0.0"
     port: int = 8004
     debug: bool = False
+    use_mock_blockchain: bool = True
 
-    class Config:
-        env_prefix = "GOLDTRACK_"
+    model_config = {"env_prefix": "", "env_file": ".env"}
 
 
 settings = Settings()
@@ -41,7 +45,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
-    """Dependency that provides a database session."""
+    """Dependance FastAPI pour session DB."""
     db = SessionLocal()
     try:
         yield db
@@ -51,28 +55,44 @@ def get_db():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("goldtrack_starting", port=settings.port)
+    mode = "MOCK" if settings.use_mock_blockchain else "FABRIC"
+    logger.info("goldtrack_demarrage", port=settings.port, mode=mode)
     yield
-    logger.info("goldtrack_shutting_down")
+    logger.info("goldtrack_arret")
 
 
 app = FastAPI(
     title="GoldTrack Service",
-    description="Blockchain wrapper for gold mining site registration and transaction tracking.",
+    description="Tracabilite blockchain pour l'or minier (mock ou Hyperledger Fabric).",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 @app.get("/health", tags=["health"])
 async def health():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": settings.service_name}
+    """Healthcheck du service GoldTrack."""
+    return {
+        "status": "healthy",
+        "service": settings.service_name,
+        "mock_mode": settings.use_mock_blockchain,
+    }
 
 
-# ------------------------------------------------------------------
-# Register blockchain routes
-# ------------------------------------------------------------------
+@app.get("/ready", tags=["health"])
+async def ready():
+    return {"status": "ready"}
+
+
+# Enregistrement des routes blockchain
 from src.routes.blockchain import router as blockchain_router  # noqa: E402
 
 app.include_router(blockchain_router)

@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertflow-svc
+  namespace: geominer
+  labels:
+    app.kubernetes.io/name: alertflow-svc
+    app.kubernetes.io/component: alerts
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8002
+      targetPort: 8002
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: alertflow-svc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertflow-svc
+  namespace: geominer
+  labels:
+    app.kubernetes.io/name: alertflow-svc
+    app.kubernetes.io/component: alerts
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertflow-svc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertflow-svc
+        app.kubernetes.io/component: alerts
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: alertflow-svc
+          image: ghcr.io/geominer/alertflow-svc:latest
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: geominer-config
+            - secretRef:
+                name: geominer-secrets
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/geominerdb"
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 20

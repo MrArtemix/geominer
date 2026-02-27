@@ -206,7 +206,7 @@ def stack_bands(bands_list: List[np.ndarray]) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Tiling
+# Tuilage (Tiling)
 # ---------------------------------------------------------------------------
 
 def tile_image(
@@ -257,3 +257,110 @@ def tile_image(
             patches.append((patch, (y_start, x_start, y_end, x_end)))
 
     return patches
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing SAR (Sentinel-1 GRD)
+# ---------------------------------------------------------------------------
+
+class SARPreprocessor:
+    """Preprocessing SAR (Sentinel-1 GRD)."""
+
+    @staticmethod
+    def calibrate_radiometric(dn_band: np.ndarray) -> np.ndarray:
+        """Calibration radiometrique DN -> Sigma0 dB via 10*log10(DN^2)."""
+        dn = np.clip(dn_band.astype(np.float64), 1e-10, None)
+        sigma0_db = 10.0 * np.log10(dn ** 2)
+        return sigma0_db.astype(np.float32)
+
+    @staticmethod
+    def lee_filter_7x7(sar_band: np.ndarray) -> np.ndarray:
+        """Filtre Lee 7x7 pour reduction du speckle."""
+        return apply_lee_filter(sar_band, window_size=7)
+
+    @staticmethod
+    def reproject_to_utm(data, src_crs, dst_epsg=32630):
+        """Reprojection vers UTM zone 30N (EPSG:32630) pour la Cote d'Ivoire."""
+        # Placeholder - en production utiliser rasterio.warp.reproject
+        return data
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing optique (Sentinel-2 L2A)
+# ---------------------------------------------------------------------------
+
+class OpticalPreprocessor:
+    """Preprocessing optique (Sentinel-2 L2A)."""
+
+    @staticmethod
+    def apply_cloud_mask(bands_dict, threshold=40):
+        """Masque nuage SCL avec seuil de brillance."""
+        return cloud_mask_s2(bands_dict, cloud_prob_threshold=threshold / 100.0)
+
+    @staticmethod
+    def compute_indices(bands_dict):
+        """Calcul des indices spectraux (NDVI, NDWI, BSI, NBI, MNDWI)."""
+        return compute_spectral_indices(bands_dict)
+
+
+# ---------------------------------------------------------------------------
+# Construction du stack 12 canaux normalise
+# ---------------------------------------------------------------------------
+
+class StackBuilder:
+    """Construction du stack 12 canaux normalise."""
+
+    @staticmethod
+    def build_12channel_stack(
+        sar_vv, sar_vh, sar_vv_prev, sar_vh_prev,
+        s2_indices: dict,
+        optical_bands: list[np.ndarray] | None = None,
+    ) -> np.ndarray:
+        """
+        Construire le stack 12 canaux normalise min-max.
+        Canaux: [B2, B3, B4, B8, B8A, B11, B12, VV, VH, NDVI, NDWI, BSI]
+        """
+        bands = []
+        if optical_bands:
+            bands.extend(optical_bands[:7])
+        bands.extend([sar_vv, sar_vh])
+        for idx_name in ["NDVI", "NDWI", "BSI"]:
+            if idx_name in s2_indices:
+                bands.append(s2_indices[idx_name])
+
+        # Padding si moins de 12 canaux
+        while len(bands) < 12:
+            bands.append(np.zeros_like(bands[0]))
+
+        stacked = np.stack(bands[:12], axis=0).astype(np.float32)
+
+        # Normalisation min-max par canal
+        for i in range(stacked.shape[0]):
+            band = stacked[i]
+            bmin, bmax = np.nanmin(band), np.nanmax(band)
+            if bmax - bmin > 1e-10:
+                stacked[i] = (band - bmin) / (bmax - bmin)
+
+        return stacked
+
+
+# ---------------------------------------------------------------------------
+# Telechargement Sentinel (mode test = patches synthetiques)
+# ---------------------------------------------------------------------------
+
+class SentinelDownloader:
+    """Telechargement Sentinel (mode test = patches synthetiques)."""
+
+    @staticmethod
+    def download_sentinel_data(zone_bbox, date_range, source="test"):
+        """
+        Telecharger les donnees Sentinel pour une zone.
+        Si source='test', utiliser les patches synthetiques du dataset.
+        """
+        if source == "test":
+            # Mode MVP: generer des patches synthetiques
+            height, width = 512, 512
+            data = np.random.rand(12, height, width).astype(np.float32)
+            return data
+        # En production: connexion API Copernicus
+        raise NotImplementedError("Telechargement reel non implemente pour le MVP")

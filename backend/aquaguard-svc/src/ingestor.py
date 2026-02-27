@@ -1,69 +1,68 @@
 """
-MQTT Ingestor for AquaGuard IoT telemetry.
+Ingesteur MQTT AquaGuard avec reconnexion, TimescaleDB et seuils OMS.
 
-Subscribes to sensor topics on the MQTT broker, persists every reading to
-the ``sensor_readings`` PostgreSQL table, and publishes threshold-breach
-alerts to the ``alerts:new`` Redis Stream.
-
-OMS drinking-water thresholds checked on every message:
-  - mercury       > 0.001 mg/L
-  - pH            outside [6.5, 8.5]
-  - turbidity     > 5 NTU
-  - dissolved_oxygen < 5 mg/L
+Souscrit aux topics capteurs, persiste dans sensor_readings (hypertable),
+et declenche des alertes via HTTP vers alertflow-svc quand les seuils sont depasses.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 
+import httpx
 import paho.mqtt.client as mqtt
-import redis
 import structlog
 from sqlalchemy import create_engine, text
 
 log = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Configuration (env vars with sensible defaults)
+# Configuration
 # ---------------------------------------------------------------------------
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/geominer",
+    "postgresql://geominer:geominer2026@postgres:5432/geominerdb",
 )
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+ALERTFLOW_URL = os.getenv("ALERTFLOW_URL", "http://alertflow-svc:8003")
+
+# Intervalle de reconnexion (secondes)
+RECONNECT_MIN_DELAY = 1
+RECONNECT_MAX_DELAY = 60
 
 # ---------------------------------------------------------------------------
-# Database & Redis clients
+# Database engine (sync, utilise dans le thread MQTT)
 # ---------------------------------------------------------------------------
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
 
 # ---------------------------------------------------------------------------
-# OMS thresholds
+# Seuils OMS pour eau potable (mining context)
 # ---------------------------------------------------------------------------
 OMS_THRESHOLDS: dict[str, dict] = {
-    "mercury": {"max": 0.001, "unit": "mg/L"},
-    "ph": {"min": 6.5, "max": 8.5, "unit": "pH"},
-    "turbidity": {"max": 5.0, "unit": "NTU"},
-    "dissolved_oxygen": {"min": 5.0, "unit": "mg/L"},
+    "mercury": {"max": 1.0, "unit": "ug/L", "severity": "CRITICAL"},
+    "turbidity": {"max": 500.0, "unit": "NTU", "severity": "HIGH"},
+    "ph": {"min": 6.0, "max": 9.0, "unit": "pH", "severity": "MEDIUM"},
+    "dissolved_oxygen": {"min": 4.0, "unit": "mg/L", "severity": "HIGH"},
 }
 
-# Topics to subscribe to
+# Topics MQTT a souscrire
 TOPICS = [
     "aquaguard/+/turbidity",
-    "aquaguard/+/ph",
     "aquaguard/+/mercury",
+    "aquaguard/+/ph",
     "aquaguard/+/dissolved_oxygen",
     "aquaguard/+/conductivity",
+    "aquaguard/+/temperature",
+    "aquaguard/+/gps",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Persistence TimescaleDB
 # ---------------------------------------------------------------------------
 
 def _persist_reading(
@@ -76,7 +75,7 @@ def _persist_reading(
     lat: float | None,
     lon: float | None,
 ) -> None:
-    """Insert a single sensor reading into PostgreSQL."""
+    """Inserer une lecture capteur dans la hypertable sensor_readings."""
     insert = text("""
         INSERT INTO sensor_readings
             (sensor_id, parameter, value, unit, timestamp, battery, lat, lon)
@@ -99,6 +98,10 @@ def _persist_reading(
         )
 
 
+# ---------------------------------------------------------------------------
+# Verification seuils + alerte HTTP
+# ---------------------------------------------------------------------------
+
 def _check_thresholds(
     sensor_id: str,
     parameter: str,
@@ -108,69 +111,95 @@ def _check_thresholds(
     lat: float | None,
     lon: float | None,
 ) -> None:
-    """Evaluate OMS thresholds and publish an alert to Redis if breached."""
+    """
+    Evaluer les seuils OMS et envoyer une alerte HTTP a alertflow-svc si depasse.
+    """
     threshold = OMS_THRESHOLDS.get(parameter)
     if threshold is None:
-        return  # no threshold defined for this parameter (e.g. conductivity)
+        return
 
     breached = False
     detail = ""
 
     if "max" in threshold and value > threshold["max"]:
         breached = True
-        detail = f"{parameter} {value} {unit} exceeds OMS max {threshold['max']} {threshold['unit']}"
+        detail = f"{parameter} = {value} {unit} depasse le seuil max {threshold['max']}"
     if "min" in threshold and value < threshold["min"]:
         breached = True
-        detail = f"{parameter} {value} {unit} below OMS min {threshold['min']} {threshold['unit']}"
+        detail = f"{parameter} = {value} {unit} sous le seuil min {threshold['min']}"
 
-    if breached:
-        alert = {
+    if not breached:
+        return
+
+    log.warning(
+        "seuil_depasse",
+        sensor_id=sensor_id,
+        parameter=parameter,
+        value=value,
+        detail=detail,
+    )
+
+    # Envoyer l'alerte a alertflow-svc via HTTP
+    try:
+        alert_payload = {
+            "alert_type": "WATER_CONTAMINATION",
+            "severity": threshold["severity"],
+            "title": f"Alerte capteur {sensor_id}: {parameter}",
+            "message": detail,
             "sensor_id": sensor_id,
-            "parameter": parameter,
-            "value": str(value),
-            "unit": unit,
-            "threshold_detail": detail,
-            "timestamp": timestamp,
-            "lat": str(lat) if lat is not None else "",
-            "lon": str(lon) if lon is not None else "",
-            "severity": "critical" if parameter == "mercury" else "warning",
+            "metadata": {
+                "sensor_id": sensor_id,
+                "parameter": parameter,
+                "value": value,
+                "unit": unit,
+                "threshold": threshold,
+                "lat": lat,
+                "lon": lon,
+                "timestamp": timestamp,
+            },
         }
-        redis_client.xadd("alerts:new", alert)
-        log.warning(
-            "threshold_breached",
-            sensor_id=sensor_id,
-            parameter=parameter,
-            value=value,
-            detail=detail,
+        resp = httpx.post(
+            f"{ALERTFLOW_URL}/alerts/test-fire",
+            json=alert_payload,
+            timeout=5.0,
         )
+        if resp.status_code in (200, 201):
+            log.info("alerte_envoyee", sensor_id=sensor_id, parameter=parameter)
+        else:
+            log.warning("alerte_echec", status=resp.status_code, body=resp.text[:200])
+    except Exception as exc:
+        log.error("alerte_http_erreur", error=str(exc))
 
 
 # ---------------------------------------------------------------------------
-# MQTT callbacks (paho-mqtt v2 API)
+# Callbacks MQTT (paho v2 API)
 # ---------------------------------------------------------------------------
 
 def on_connect(client: mqtt.Client, userdata, flags, reason_code, properties=None):
-    """Called when the client connects to the broker."""
+    """Souscription aux topics a chaque (re)connexion."""
     if reason_code == 0:
-        log.info("mqtt.connected", broker=MQTT_BROKER, port=MQTT_BROKER_PORT)
+        log.info("mqtt.connecte", broker=MQTT_BROKER, port=MQTT_BROKER_PORT)
         for topic in TOPICS:
             client.subscribe(topic, qos=1)
-            log.info("mqtt.subscribed", topic=topic)
+            log.info("mqtt.souscrit", topic=topic)
     else:
-        log.error("mqtt.connection_failed", reason_code=reason_code)
+        log.error("mqtt.connexion_echouee", reason_code=reason_code)
 
 
 def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
-    """Called for every received MQTT message."""
+    """Traitement de chaque message MQTT recu."""
     try:
-        # Topic format: aquaguard/<sensor_id>/<parameter>
         parts = message.topic.split("/")
         if len(parts) != 3:
-            log.warning("mqtt.unexpected_topic", topic=message.topic)
+            log.warning("mqtt.topic_inattendu", topic=message.topic)
             return
 
         _, sensor_id, parameter = parts
         payload = json.loads(message.payload.decode("utf-8"))
+
+        # Ignorer les messages GPS (coordonnees uniquement)
+        if parameter == "gps":
+            return
 
         value = float(payload["value"])
         unit = str(payload.get("unit", ""))
@@ -180,37 +209,33 @@ def on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
         lon = payload.get("lon")
 
         log.info(
-            "mqtt.reading_received",
+            "mqtt.lecture_recue",
             sensor_id=sensor_id,
             parameter=parameter,
             value=value,
         )
 
-        # Persist to PostgreSQL
+        # Persister dans TimescaleDB
         _persist_reading(sensor_id, parameter, value, unit, timestamp, battery, lat, lon)
 
-        # Evaluate OMS thresholds
+        # Verifier les seuils OMS
         _check_thresholds(sensor_id, parameter, value, unit, timestamp, lat, lon)
 
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        log.error(
-            "mqtt.message_parse_error",
-            topic=message.topic,
-            error=str(exc),
-        )
+        log.error("mqtt.erreur_parsing", topic=message.topic, error=str(exc))
 
 
 def on_disconnect(client: mqtt.Client, userdata, flags, reason_code, properties=None):
-    """Called when the client disconnects from the broker."""
-    log.warning("mqtt.disconnected", reason_code=reason_code)
+    """Gestion de la deconnexion avec backoff."""
+    log.warning("mqtt.deconnecte", reason_code=reason_code)
 
 
 # ---------------------------------------------------------------------------
-# Entry point (called from main.py in a background thread)
+# Point d'entree (thread daemon depuis main.py)
 # ---------------------------------------------------------------------------
 
 def start_mqtt_subscriber() -> None:
-    """Create an MQTT client and run the network loop forever."""
+    """Creer un client MQTT avec reconnexion automatique et boucle infinie."""
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id="aquaguard-ingestor",
@@ -220,6 +245,19 @@ def start_mqtt_subscriber() -> None:
     client.on_message = on_message
     client.on_disconnect = on_disconnect
 
-    log.info("mqtt.connecting", broker=MQTT_BROKER, port=MQTT_BROKER_PORT)
-    client.connect(MQTT_BROKER, MQTT_BROKER_PORT, keepalive=60)
-    client.loop_forever()
+    # Reconnexion automatique avec backoff exponentiel
+    client.reconnect_delay_set(
+        min_delay=RECONNECT_MIN_DELAY,
+        max_delay=RECONNECT_MAX_DELAY,
+    )
+
+    delay = RECONNECT_MIN_DELAY
+    while True:
+        try:
+            log.info("mqtt.connexion_en_cours", broker=MQTT_BROKER, port=MQTT_BROKER_PORT)
+            client.connect(MQTT_BROKER, MQTT_BROKER_PORT, keepalive=60)
+            client.loop_forever()
+        except Exception as exc:
+            log.error("mqtt.erreur_connexion", error=str(exc), retry_in=delay)
+            time.sleep(delay)
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)

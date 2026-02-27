@@ -1,13 +1,14 @@
 'use client';
 
 /* ============================================
-   useWebSocket - Socket.io connection hook
+   useWebSocket - Socket.io avec toast sonner
    ============================================ */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useSession } from 'next-auth/react';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useAlertStore } from '@/stores/alertStore';
 import type { Alert } from '@/types';
 
@@ -17,7 +18,6 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'er
 
 interface UseWebSocketReturn {
   status: ConnectionStatus;
-  /** Manually disconnect / reconnect */
   disconnect: () => void;
   reconnect: () => void;
 }
@@ -27,6 +27,22 @@ interface UseWebSocketReturn {
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000';
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
+
+/* ---------- sévérité → durée toast ---------- */
+
+const SEVERITY_DURATION: Record<string, number> = {
+  CRITICAL: 8000,
+  HIGH: 6000,
+  MEDIUM: 4000,
+  LOW: 3000,
+};
+
+const SEVERITY_LABEL_FR: Record<string, string> = {
+  CRITICAL: 'Critique',
+  HIGH: 'Élevé',
+  MEDIUM: 'Modéré',
+  LOW: 'Faible',
+};
 
 /* ---------- hook ---------- */
 
@@ -40,7 +56,6 @@ export function useWebSocket(): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
 
   const connect = useCallback(() => {
-    // Do not connect without a valid token
     const token = (session as { accessToken?: string } | null)?.accessToken;
     if (!token) return;
 
@@ -49,7 +64,7 @@ export function useWebSocket(): UseWebSocketReturn {
     const socket = io(WS_URL, {
       auth: { token },
       transports: ['websocket'],
-      reconnection: false, // We handle reconnection ourselves
+      reconnection: false,
     });
 
     socket.on('connect', () => {
@@ -67,14 +82,46 @@ export function useWebSocket(): UseWebSocketReturn {
       scheduleReconnect();
     });
 
-    /* --- domain events --- */
+    /* --- événements domaine --- */
 
     socket.on('alert:new', (alert: Alert) => {
       addAlert(alert);
+
+      /* Rafraichir les requetes liees aux alertes et dashboard */
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      queryClient.invalidateQueries({ queryKey: ['recent-alerts-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+
+      /* Toast sonner colore par severite (bas-droite) */
+      const severity = alert.severity || 'MEDIUM';
+      const label = SEVERITY_LABEL_FR[severity] || severity;
+      const duration = SEVERITY_DURATION[severity] || 4000;
+
+      if (severity === 'CRITICAL') {
+        toast.error(alert.title, {
+          description: `Severite : ${label}`,
+          duration,
+          action: alert.site_name
+            ? { label: 'Voir le site', onClick: () => window.location.assign('/alerts') }
+            : undefined,
+        });
+      } else if (severity === 'HIGH') {
+        toast.warning(alert.title, {
+          description: `Severite : ${label}`,
+          duration,
+          action: alert.site_name
+            ? { label: 'Voir le site', onClick: () => window.location.assign('/alerts') }
+            : undefined,
+        });
+      } else {
+        toast.info(alert.title, {
+          description: `Severite : ${label}`,
+          duration,
+        });
+      }
     });
 
     socket.on('site:updated', (payload: { site_id: string }) => {
-      // Invalidate React Query cache so lists / detail refetch
       queryClient.invalidateQueries({ queryKey: ['sites'] });
       queryClient.invalidateQueries({ queryKey: ['site', payload.site_id] });
     });
@@ -104,7 +151,6 @@ export function useWebSocket(): UseWebSocketReturn {
     connect();
   }, [disconnect, connect]);
 
-  /* --- lifecycle --- */
   useEffect(() => {
     connect();
     return () => {

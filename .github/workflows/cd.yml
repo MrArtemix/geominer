@@ -1,0 +1,197 @@
+name: Ge O'Miner CD
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/geominer
+
+jobs:
+  # ============================================
+  # Build + Push Docker images vers ghcr.io
+  # ============================================
+  build-and-push:
+    name: Build ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend/api-gateway
+            image: api-gateway
+          - service: backend/minespotai-svc
+            image: minespotai-svc
+          - service: backend/alertflow-svc
+            image: alertflow-svc
+          - service: backend/aquaguard-svc
+            image: aquaguard-svc
+          - service: backend/goldtrack-svc
+            image: goldtrack-svc
+          - service: backend/legalvault-svc
+            image: legalvault-svc
+          - service: backend/goldpath-svc
+            image: goldpath-svc
+          - service: backend/pipeline-svc
+            image: pipeline-svc
+          - service: backend/reporting-svc
+            image: reporting-svc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connexion a ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extraire les metadonnees Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.image }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build et push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ============================================
+  # Notification si echec build
+  # ============================================
+  notify-failure:
+    name: Notification echec
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: failure()
+    steps:
+      - name: Notifier echec build
+        run: |
+          echo "::error::Build echoue pour le commit ${{ github.sha }}"
+          echo "Branche: ${{ github.ref_name }}"
+          echo "Auteur: ${{ github.actor }}"
+
+  # ============================================
+  # Deploy vers Kubernetes
+  # ============================================
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: v1.29.0
+
+      - name: Configurer kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+
+      - name: Appliquer les manifestes Kubernetes
+        run: |
+          # Appliquer namespace et configuration
+          kubectl apply -f infra/k8s/namespace.yaml
+          kubectl apply -f infra/k8s/configmap.yaml
+
+          # Appliquer l'infrastructure
+          kubectl apply -f infra/k8s/postgres-statefulset.yaml
+          kubectl apply -f infra/k8s/redis-deployment.yaml
+          kubectl apply -f infra/k8s/minio-statefulset.yaml
+
+          # Appliquer les services applicatifs
+          kubectl apply -f infra/k8s/minespotai-deployment.yaml
+          kubectl apply -f infra/k8s/alertflow-deployment.yaml
+          kubectl apply -f infra/k8s/api-gateway-deployment.yaml
+
+          # Appliquer l'ingress
+          kubectl apply -f infra/k8s/ingress.yaml
+
+      - name: Mettre a jour les images
+        run: |
+          TAG="${{ github.ref_name }}"
+          SERVICES=("minespotai-svc" "alertflow-svc" "api-gateway")
+          for SVC in "${SERVICES[@]}"; do
+            kubectl -n geominer set image "deployment/${SVC}" \
+              "${SVC}=${{ env.IMAGE_PREFIX }}-${SVC}:${TAG}"
+          done
+
+      - name: Verifier le deploiement
+        run: |
+          kubectl -n geominer rollout status deployment/api-gateway --timeout=120s
+          kubectl -n geominer rollout status deployment/minespotai-svc --timeout=180s
+          kubectl -n geominer rollout status deployment/alertflow-svc --timeout=120s
+
+      - name: Statut du deploiement
+        if: always()
+        run: |
+          echo "=== Pods ==="
+          kubectl -n geominer get pods
+          echo "=== Services ==="
+          kubectl -n geominer get svc
+          echo "=== Ingress ==="
+          kubectl -n geominer get ingress
+
+  # ============================================
+  # GitHub Release sur tag semver
+  # ============================================
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generer les notes de release
+        id: notes
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD)
+          else
+            NOTES=$(git log --pretty=format:"- %s (%h)" HEAD~10..HEAD)
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Creer la release GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Ge O'Miner ${{ github.ref_name }}"
+          body: |
+            ## Changements
+
+            ${{ steps.notes.outputs.notes }}
+
+            ## Images Docker
+
+            Toutes les images sont disponibles sur `ghcr.io/${{ github.repository_owner }}/geominer-*:${{ github.ref_name }}`
+          draft: false
+          prerelease: false

@@ -1,14 +1,24 @@
 -- =============================================================
--- Ge O'Miner - Schema de Base de Donnees PostGIS
+-- Ge O'Miner - Schema de Base de Donnees
+-- PostGIS + TimescaleDB + H3
 -- GeoSmart Africa - Surveillance Orpaillage Clandestin CI
 -- =============================================================
 
--- Extensions
+-- Extensions de base
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "postgis";
 CREATE EXTENSION IF NOT EXISTS "postgis_raster";
--- H3 extension (installer separement si disponible)
--- CREATE EXTENSION IF NOT EXISTS "h3";
+
+-- TimescaleDB (disponible via image timescale/timescaledb-ha)
+CREATE EXTENSION IF NOT EXISTS "timescaledb" CASCADE;
+
+-- H3 : fallback silencieux si non disponible (calcul cote Python h3-py)
+DO $$ BEGIN
+    CREATE EXTENSION IF NOT EXISTS "h3";
+    CREATE EXTENSION IF NOT EXISTS "h3_postgis";
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Extensions H3 non disponibles - fallback vers h3-py cote Python';
+END $$;
 
 -- =============================================================
 -- ENUMS
@@ -35,7 +45,7 @@ CREATE TYPE operation_status_enum AS ENUM (
     'PLANNED',
     'IN_PROGRESS',
     'COMPLETED',
-    'ABORTED'
+    'CANCELLED'
 );
 
 CREATE TYPE permit_status_enum AS ENUM (
@@ -58,6 +68,15 @@ CREATE TYPE user_role_enum AS ENUM (
     'API_PARTENAIRE'
 );
 
+CREATE TYPE miner_status_enum AS ENUM (
+    'IDENTIFIED',
+    'REGISTERED',
+    'WARNED',
+    'ARRESTED',
+    'CONVICTED',
+    'COOPERATIVE'
+);
+
 -- =============================================================
 -- TABLE: users
 -- =============================================================
@@ -66,16 +85,19 @@ CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     keycloak_id VARCHAR(255) UNIQUE,
     email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(100),
     full_name VARCHAR(255) NOT NULL,
     role user_role_enum NOT NULL DEFAULT 'AGENT_TERRAIN',
     zones_access UUID[] DEFAULT '{}',
     is_active BOOLEAN DEFAULT TRUE,
+    last_login TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_users_keycloak_id ON users(keycloak_id);
 CREATE INDEX idx_users_role ON users(role);
+CREATE INDEX idx_users_username ON users(username);
 
 -- =============================================================
 -- TABLE: mining_sites
@@ -97,6 +119,8 @@ CREATE TABLE IF NOT EXISTS mining_sites (
     satellite_date DATE,
     sat_source VARCHAR(50),
     status site_status_enum DEFAULT 'DETECTED',
+    gold_estim_ton NUMERIC(10,4),
+    status_history JSONB DEFAULT '[]'::jsonb,
     blockchain_txid VARCHAR(128),
     ipfs_cid VARCHAR(128),
     region VARCHAR(100),
@@ -108,14 +132,14 @@ CREATE TABLE IF NOT EXISTS mining_sites (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Spatial index
+-- Index spatial
 CREATE INDEX idx_mining_sites_geometry ON mining_sites USING GIST(geometry);
 CREATE INDEX idx_mining_sites_centroid ON mining_sites USING GIST(centroid);
--- H3 index
+-- Index H3
 CREATE INDEX idx_mining_sites_h3 ON mining_sites(h3_index_r7);
--- Composite index for status queries
+-- Index composite pour les requetes par statut
 CREATE INDEX idx_mining_sites_status_detected ON mining_sites(status, detected_at DESC);
--- Site code lookup
+-- Recherche par code site
 CREATE INDEX idx_mining_sites_code ON mining_sites(site_code);
 
 -- =============================================================
@@ -156,8 +180,13 @@ CREATE TABLE IF NOT EXISTS operations (
     site_id UUID REFERENCES mining_sites(id) ON DELETE CASCADE,
     officer_id UUID REFERENCES users(id),
     team VARCHAR(255),
+    team_members UUID[] DEFAULT '{}',
     status operation_status_enum DEFAULT 'PLANNED',
     objective TEXT,
+    equipment_seized JSONB DEFAULT '[]'::jsonb,
+    arrests_count INTEGER DEFAULT 0,
+    photos_ipfs TEXT[] DEFAULT '{}',
+    blockchain_txid VARCHAR(128),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     report_ipfs_cid VARCHAR(128),
@@ -190,8 +219,15 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 CREATE INDEX idx_sensor_readings_sensor ON sensor_readings(sensor_id, time DESC);
 CREATE INDEX idx_sensor_readings_param ON sensor_readings(parameter, time DESC);
 
--- TimescaleDB hypertable (activer si TimescaleDB est installe)
--- SELECT create_hypertable('sensor_readings', 'time', if_not_exists => TRUE);
+-- Activer hypertable TimescaleDB
+SELECT create_hypertable('sensor_readings', 'time', if_not_exists => TRUE);
+
+-- Politique de compression automatique apres 7 jours
+ALTER TABLE sensor_readings SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'sensor_id,parameter'
+);
+SELECT add_compression_policy('sensor_readings', INTERVAL '7 days', if_not_exists => TRUE);
 
 -- =============================================================
 -- TABLE: gold_transactions
@@ -289,7 +325,98 @@ CREATE TABLE IF NOT EXISTS site_history (
 CREATE INDEX idx_site_history_site ON site_history(site_id, created_at DESC);
 
 -- =============================================================
--- FUNCTIONS
+-- TABLE: miners_registry (registre des orpailleurs identifies)
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS miners_registry (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    full_name VARCHAR(255) NOT NULL,
+    alias VARCHAR(100),
+    nationality VARCHAR(100),
+    photo_ipfs VARCHAR(128),
+    fingerprint_hash VARCHAR(64),
+    status miner_status_enum DEFAULT 'IDENTIFIED',
+    known_sites UUID[] DEFAULT '{}',
+    notes TEXT,
+    registered_by UUID REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_miners_status ON miners_registry(status);
+CREATE INDEX idx_miners_name ON miners_registry(full_name);
+
+-- =============================================================
+-- TABLE: evidence_records (preuves terrain chainees)
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS evidence_records (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID REFERENCES mining_sites(id) ON DELETE CASCADE,
+    operation_id UUID REFERENCES operations(id) ON DELETE SET NULL,
+    record_type VARCHAR(50) NOT NULL,
+    description TEXT,
+    gps_location GEOMETRY(POINT, 4326),
+    photos_ipfs TEXT[] DEFAULT '{}',
+    sha256_hash VARCHAR(64),
+    blockchain_txid VARCHAR(128),
+    collected_by UUID REFERENCES users(id),
+    collected_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_evidence_records_site ON evidence_records(site_id);
+CREATE INDEX idx_evidence_records_operation ON evidence_records(operation_id);
+CREATE INDEX idx_evidence_records_location ON evidence_records USING GIST(gps_location);
+CREATE INDEX idx_evidence_records_type ON evidence_records(record_type);
+
+-- =============================================================
+-- TABLE: audit_logs (journal d'audit systeme)
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id),
+    action VARCHAR(100) NOT NULL,
+    resource_type VARCHAR(50) NOT NULL,
+    resource_id UUID,
+    old_value JSONB,
+    new_value JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+CREATE INDEX idx_audit_logs_created ON audit_logs(created_at DESC);
+
+-- =============================================================
+-- TABLE: h3_risk_scores (scores de risque par cellule H3)
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS h3_risk_scores (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    h3_index VARCHAR(20) NOT NULL,
+    resolution INTEGER NOT NULL DEFAULT 7,
+    risk_score NUMERIC(4,3) CHECK (risk_score >= 0 AND risk_score <= 1),
+    site_count INTEGER DEFAULT 0,
+    alert_count INTEGER DEFAULT 0,
+    water_risk NUMERIC(4,3) DEFAULT 0,
+    deforestation_risk NUMERIC(4,3) DEFAULT 0,
+    computed_at TIMESTAMPTZ DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_h3_risk_unique ON h3_risk_scores(h3_index, resolution);
+CREATE INDEX idx_h3_risk_score ON h3_risk_scores(risk_score DESC);
+CREATE INDEX idx_h3_risk_computed ON h3_risk_scores(computed_at DESC);
+
+-- =============================================================
+-- FUNCTIONS & TRIGGERS
 -- =============================================================
 
 -- Trigger pour mettre a jour updated_at automatiquement
@@ -315,6 +442,14 @@ CREATE TRIGGER trg_operations_updated
 
 CREATE TRIGGER trg_permits_updated
     BEFORE UPDATE ON mining_permits
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_miners_registry_updated
+    BEFORE UPDATE ON miners_registry
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_h3_risk_scores_updated
+    BEFORE UPDATE ON h3_risk_scores
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Trigger pour enregistrer l'historique des changements de statut

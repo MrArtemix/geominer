@@ -2,21 +2,21 @@ version: "3.9"
 
 services:
   # ============================================
-  # PostgreSQL 16 + PostGIS 3.4
+  # PostgreSQL 16 + PostGIS + TimescaleDB
   # ============================================
   postgres:
-    image: postgis/postgis:16-3.4
+    image: timescale/timescaledb-ha:pg16
     container_name: geominer-postgres
     restart: unless-stopped
+    profiles: ["core"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_MULTIPLE_DATABASES: keycloak
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/home/postgres/pgdata/data
       - ../../scripts/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
       - ../../scripts/seed-data.sql:/docker-entrypoint-initdb.d/02-seed.sql
       - ./init-multi-db.sh:/docker-entrypoint-initdb.d/00-init-multi-db.sh
@@ -36,6 +36,7 @@ services:
     image: redis:7-alpine
     container_name: geominer-redis
     restart: unless-stopped
+    profiles: ["core"]
     command: >
       redis-server /usr/local/etc/redis/redis.conf
       --requirepass ${REDIS_PASSWORD}
@@ -59,6 +60,7 @@ services:
     image: minio/minio:latest
     container_name: geominer-minio
     restart: unless-stopped
+    profiles: ["core"]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -71,15 +73,16 @@ services:
     networks:
       - backend-net
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # MinIO bucket initialization
+  # MinIO bucket initialization (6 buckets)
   minio-init:
     image: minio/mc:latest
     container_name: geominer-minio-init
+    profiles: ["core"]
     depends_on:
       minio:
         condition: service_healthy
@@ -91,8 +94,10 @@ services:
       mc mb --ignore-existing geominer/predictions;
       mc mb --ignore-existing geominer/evidence;
       mc mb --ignore-existing geominer/reports;
+      mc mb --ignore-existing geominer/models;
       mc anonymous set download geominer/reports;
-      echo 'MinIO buckets initialized successfully';
+      mc retention set --default compliance 30y geominer/evidence 2>/dev/null || echo 'WARN: Object Lock non supporte en dev - retention ignoree';
+      echo 'MinIO: 6 buckets initialises (raw-satellite, processed-data, predictions, evidence, reports, models)';
       "
     networks:
       - backend-net
@@ -104,12 +109,13 @@ services:
     image: quay.io/keycloak/keycloak:24.0
     container_name: geominer-keycloak
     restart: unless-stopped
+    profiles: ["core"]
     command: start-dev --import-realm
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloakdb
       KC_DB_USERNAME: ${POSTGRES_USER}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
       KC_HEALTH_ENABLED: "true"
@@ -137,6 +143,7 @@ services:
     image: eclipse-mosquitto:2
     container_name: geominer-mosquitto
     restart: unless-stopped
+    profiles: ["core"]
     ports:
       - "${MQTT_PORT:-1883}:1883"
       - "${MQTT_WS_PORT:-9883}:9883"
@@ -149,7 +156,7 @@ services:
       - iot-net
       - backend-net
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3", "-u", "geominer", "-P", "geominer_secret_2024"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -161,6 +168,7 @@ services:
     image: prefecthq/prefect:2-latest
     container_name: geominer-prefect
     restart: unless-stopped
+    profiles: ["core"]
     command: prefect server start --host 0.0.0.0
     environment:
       PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/geominerdb
@@ -178,6 +186,89 @@ services:
       timeout: 5s
       retries: 5
 
+  # ============================================
+  # MLflow (ML Model Tracking)
+  # ============================================
+  mlflow:
+    image: python:3.11-slim
+    container_name: geominer-mlflow
+    restart: unless-stopped
+    profiles: ["core"]
+    command: >
+      bash -c "
+      pip install --quiet mlflow psycopg2-binary boto3 &&
+      mlflow server
+        --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflowdb
+        --default-artifact-root s3://models
+        --host 0.0.0.0
+        --port 5000
+      "
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - backend-net
+      - db-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  # ============================================
+  # IPFS / Kubo (stockage decentralise preuves)
+  # ============================================
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: geominer-ipfs
+    restart: unless-stopped
+    profiles: ["core"]
+    ports:
+      - "${IPFS_API_PORT:-5001}:5001"
+      - "${IPFS_GATEWAY_PORT:-8081}:8080"
+    volumes:
+      - ipfs_data:/data/ipfs
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ============================================
+  # Vault (Gestion des secrets - mode dev)
+  # ============================================
+  vault:
+    image: hashicorp/vault:latest
+    container_name: geominer-vault
+    restart: unless-stopped
+    profiles: ["core"]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "vault status || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 networks:
   backend-net:
     driver: bridge
@@ -192,3 +283,4 @@ volumes:
   minio_data:
   mosquitto_data:
   mosquitto_log:
+  ipfs_data:

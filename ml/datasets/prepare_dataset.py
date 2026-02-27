@@ -1,263 +1,334 @@
+#!/usr/bin/env python3
 """
-Prepare training dataset for MineSpot SegFormer.
+Ge O'Miner - Generateur de dataset synthetique pour SegFormer.
 
-Reads multi-band GeoTIFF images and corresponding label masks, tiles them
-into 256x256 patches, filters out patches with excessive cloud cover or
-no-data, and saves them as numpy ``.npy`` files with a train/val/test split.
+Genere 200 patches 256x256x12 canaux simulant un stack satellite multi-spectral :
+  - 80 patches positifs (orpaillage) : VV/VH eleves, NDVI bas, BSI eleve, turbidite eau
+  - 120 patches negatifs : foret (NDVI>0.6), agriculture (NDVI 0.3-0.6), eau (NDWI>0.3), urbain
+
+Sauvegarde en .npy avec annotations.json et preview.png.
 
 Usage:
-    python prepare_dataset.py \
-        --input-dir /data/raw \
-        --output-dir /data/prepared \
-        --patch-size 256 \
-        --overlap 32
+    python prepare_dataset.py
+    python prepare_dataset.py --output-dir /custom/path --num-patches 200
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
-from typing import List, Tuple
 
 import numpy as np
-import rasterio
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Configuration des 12 canaux simulant un stack Sentinel-1 + Sentinel-2
+# ---------------------------------------------------------------------------
+# Index des canaux :
+#  0: B02 (Blue)    1: B03 (Green)   2: B04 (Red)    3: B05 (Red Edge 1)
+#  4: B06 (Red Edge 2)  5: B07 (Red Edge 3)  6: B08 (NIR)  7: B11 (SWIR1)
+#  8: B12 (SWIR2)   9: NDVI   10: VV (SAR)   11: VH (SAR)
+
+NUM_CHANNELS = 12
+PATCH_SIZE = 256
+SEED = 42
+
+
+def _generate_mining_patch(rng: np.random.Generator) -> np.ndarray:
+    """
+    Generer un patch positif (site d'orpaillage).
+    Caracteristiques : VV/VH eleves, NDVI tres bas (<0.2), BSI eleve, turbidite eau.
+    """
+    patch = np.zeros((NUM_CHANNELS, PATCH_SIZE, PATCH_SIZE), dtype=np.float32)
+
+    # Sol nu / degrade - reflectances elevees dans le visible
+    patch[0] = rng.uniform(0.15, 0.35, (PATCH_SIZE, PATCH_SIZE))  # Blue
+    patch[1] = rng.uniform(0.18, 0.40, (PATCH_SIZE, PATCH_SIZE))  # Green
+    patch[2] = rng.uniform(0.20, 0.45, (PATCH_SIZE, PATCH_SIZE))  # Red
+
+    # Red Edge - faible vegetation
+    patch[3] = rng.uniform(0.12, 0.25, (PATCH_SIZE, PATCH_SIZE))
+    patch[4] = rng.uniform(0.10, 0.22, (PATCH_SIZE, PATCH_SIZE))
+    patch[5] = rng.uniform(0.08, 0.20, (PATCH_SIZE, PATCH_SIZE))
+
+    # NIR tres bas (pas de vegetation)
+    patch[6] = rng.uniform(0.05, 0.18, (PATCH_SIZE, PATCH_SIZE))
+
+    # SWIR eleve (sol nu)
+    patch[7] = rng.uniform(0.25, 0.50, (PATCH_SIZE, PATCH_SIZE))
+    patch[8] = rng.uniform(0.20, 0.45, (PATCH_SIZE, PATCH_SIZE))
+
+    # NDVI tres bas (< 0.2) - sol degrade
+    patch[9] = rng.uniform(-0.1, 0.15, (PATCH_SIZE, PATCH_SIZE))
+
+    # SAR VV/VH eleves (terrain perturbe, machinerie)
+    patch[10] = rng.uniform(0.4, 0.85, (PATCH_SIZE, PATCH_SIZE))  # VV
+    patch[11] = rng.uniform(0.3, 0.75, (PATCH_SIZE, PATCH_SIZE))  # VH
+
+    # Ajouter des taches d'eau turbide (mercure) dans ~20% du patch
+    water_mask = rng.random((PATCH_SIZE, PATCH_SIZE)) < 0.2
+    patch[0, water_mask] = rng.uniform(0.05, 0.12, water_mask.sum())
+    patch[6, water_mask] = rng.uniform(0.02, 0.08, water_mask.sum())
+    patch[9, water_mask] = rng.uniform(-0.3, -0.1, water_mask.sum())
+
+    return patch
+
+
+def _generate_forest_patch(rng: np.random.Generator) -> np.ndarray:
+    """Generer un patch foret (negatif). NDVI > 0.6."""
+    patch = np.zeros((NUM_CHANNELS, PATCH_SIZE, PATCH_SIZE), dtype=np.float32)
+
+    # Vegetation dense - faible visible, fort NIR
+    patch[0] = rng.uniform(0.02, 0.06, (PATCH_SIZE, PATCH_SIZE))  # Blue
+    patch[1] = rng.uniform(0.03, 0.08, (PATCH_SIZE, PATCH_SIZE))  # Green
+    patch[2] = rng.uniform(0.02, 0.05, (PATCH_SIZE, PATCH_SIZE))  # Red
+    patch[3] = rng.uniform(0.10, 0.25, (PATCH_SIZE, PATCH_SIZE))
+    patch[4] = rng.uniform(0.20, 0.40, (PATCH_SIZE, PATCH_SIZE))
+    patch[5] = rng.uniform(0.30, 0.50, (PATCH_SIZE, PATCH_SIZE))
+    patch[6] = rng.uniform(0.35, 0.60, (PATCH_SIZE, PATCH_SIZE))  # NIR fort
+    patch[7] = rng.uniform(0.10, 0.20, (PATCH_SIZE, PATCH_SIZE))
+    patch[8] = rng.uniform(0.08, 0.15, (PATCH_SIZE, PATCH_SIZE))
+    patch[9] = rng.uniform(0.60, 0.90, (PATCH_SIZE, PATCH_SIZE))  # NDVI > 0.6
+    patch[10] = rng.uniform(0.10, 0.30, (PATCH_SIZE, PATCH_SIZE))  # VV faible
+    patch[11] = rng.uniform(0.05, 0.20, (PATCH_SIZE, PATCH_SIZE))  # VH faible
+
+    return patch
+
+
+def _generate_agriculture_patch(rng: np.random.Generator) -> np.ndarray:
+    """Generer un patch agriculture (negatif). NDVI 0.3-0.6 cyclique."""
+    patch = np.zeros((NUM_CHANNELS, PATCH_SIZE, PATCH_SIZE), dtype=np.float32)
+
+    # Vegetation moderee avec pattern regulier (parcelles)
+    patch[0] = rng.uniform(0.05, 0.12, (PATCH_SIZE, PATCH_SIZE))
+    patch[1] = rng.uniform(0.08, 0.18, (PATCH_SIZE, PATCH_SIZE))
+    patch[2] = rng.uniform(0.06, 0.15, (PATCH_SIZE, PATCH_SIZE))
+    patch[3] = rng.uniform(0.12, 0.28, (PATCH_SIZE, PATCH_SIZE))
+    patch[4] = rng.uniform(0.18, 0.35, (PATCH_SIZE, PATCH_SIZE))
+    patch[5] = rng.uniform(0.22, 0.38, (PATCH_SIZE, PATCH_SIZE))
+    patch[6] = rng.uniform(0.20, 0.40, (PATCH_SIZE, PATCH_SIZE))  # NIR moyen
+    patch[7] = rng.uniform(0.12, 0.25, (PATCH_SIZE, PATCH_SIZE))
+    patch[8] = rng.uniform(0.10, 0.22, (PATCH_SIZE, PATCH_SIZE))
+    patch[9] = rng.uniform(0.30, 0.60, (PATCH_SIZE, PATCH_SIZE))  # NDVI cyclique
+    patch[10] = rng.uniform(0.15, 0.35, (PATCH_SIZE, PATCH_SIZE))
+    patch[11] = rng.uniform(0.10, 0.25, (PATCH_SIZE, PATCH_SIZE))
+
+    # Ajouter des lignes regulieres (sillons agricoles)
+    for i in range(0, PATCH_SIZE, 16):
+        stripe = slice(i, min(i + 3, PATCH_SIZE))
+        patch[2, stripe, :] *= 1.3
+        patch[9, stripe, :] *= 0.7
+
+    return patch
+
+
+def _generate_water_patch(rng: np.random.Generator) -> np.ndarray:
+    """Generer un patch eau (negatif). NDWI > 0.3."""
+    patch = np.zeros((NUM_CHANNELS, PATCH_SIZE, PATCH_SIZE), dtype=np.float32)
+
+    # Eau - absorption forte dans NIR/SWIR
+    patch[0] = rng.uniform(0.05, 0.15, (PATCH_SIZE, PATCH_SIZE))  # Blue eleve relatif
+    patch[1] = rng.uniform(0.04, 0.12, (PATCH_SIZE, PATCH_SIZE))
+    patch[2] = rng.uniform(0.02, 0.08, (PATCH_SIZE, PATCH_SIZE))
+    patch[3] = rng.uniform(0.01, 0.05, (PATCH_SIZE, PATCH_SIZE))
+    patch[4] = rng.uniform(0.01, 0.04, (PATCH_SIZE, PATCH_SIZE))
+    patch[5] = rng.uniform(0.01, 0.03, (PATCH_SIZE, PATCH_SIZE))
+    patch[6] = rng.uniform(0.005, 0.03, (PATCH_SIZE, PATCH_SIZE))  # NIR tres bas
+    patch[7] = rng.uniform(0.002, 0.02, (PATCH_SIZE, PATCH_SIZE))
+    patch[8] = rng.uniform(0.001, 0.015, (PATCH_SIZE, PATCH_SIZE))
+    patch[9] = rng.uniform(-0.5, -0.1, (PATCH_SIZE, PATCH_SIZE))  # NDVI negatif
+    patch[10] = rng.uniform(0.02, 0.10, (PATCH_SIZE, PATCH_SIZE))  # VV faible
+    patch[11] = rng.uniform(0.01, 0.06, (PATCH_SIZE, PATCH_SIZE))  # VH faible
+
+    return patch
+
+
+def _generate_urban_patch(rng: np.random.Generator) -> np.ndarray:
+    """Generer un patch urbain (negatif)."""
+    patch = np.zeros((NUM_CHANNELS, PATCH_SIZE, PATCH_SIZE), dtype=np.float32)
+
+    # Zones urbaines - reflectances mixtes, structures regulieres
+    patch[0] = rng.uniform(0.10, 0.25, (PATCH_SIZE, PATCH_SIZE))
+    patch[1] = rng.uniform(0.12, 0.28, (PATCH_SIZE, PATCH_SIZE))
+    patch[2] = rng.uniform(0.12, 0.30, (PATCH_SIZE, PATCH_SIZE))
+    patch[3] = rng.uniform(0.10, 0.22, (PATCH_SIZE, PATCH_SIZE))
+    patch[4] = rng.uniform(0.10, 0.20, (PATCH_SIZE, PATCH_SIZE))
+    patch[5] = rng.uniform(0.10, 0.20, (PATCH_SIZE, PATCH_SIZE))
+    patch[6] = rng.uniform(0.12, 0.25, (PATCH_SIZE, PATCH_SIZE))
+    patch[7] = rng.uniform(0.15, 0.35, (PATCH_SIZE, PATCH_SIZE))
+    patch[8] = rng.uniform(0.12, 0.30, (PATCH_SIZE, PATCH_SIZE))
+    patch[9] = rng.uniform(0.05, 0.25, (PATCH_SIZE, PATCH_SIZE))  # NDVI faible
+    patch[10] = rng.uniform(0.25, 0.55, (PATCH_SIZE, PATCH_SIZE))  # VV moyen-eleve
+    patch[11] = rng.uniform(0.15, 0.40, (PATCH_SIZE, PATCH_SIZE))  # VH moyen
+
+    # Ajouter des structures en grille (routes/batiments)
+    for i in range(0, PATCH_SIZE, 32):
+        patch[7, i:i+2, :] = rng.uniform(0.4, 0.6, (min(2, PATCH_SIZE - i), PATCH_SIZE))
+        patch[7, :, i:i+2] = rng.uniform(0.4, 0.6, (PATCH_SIZE, min(2, PATCH_SIZE - i)))
+
+    return patch
+
+
+# ---------------------------------------------------------------------------
+# Generation du dataset complet
 # ---------------------------------------------------------------------------
 
-def tile_image(
-    image: np.ndarray,
-    patch_size: int = 256,
-    overlap: int = 32,
-) -> List[Tuple[np.ndarray, Tuple[int, int]]]:
-    """
-    Tile a ``(C, H, W)`` array into overlapping patches.
-
-    Returns a list of ``(patch, (row, col))`` where *patch* has shape
-    ``(C, patch_size, patch_size)`` and ``(row, col)`` is the top-left pixel
-    coordinate of the patch in the source image.
-    """
-    C, H, W = image.shape
-    step = patch_size - overlap
-    patches: List[Tuple[np.ndarray, Tuple[int, int]]] = []
-
-    for y in range(0, H, step):
-        for x in range(0, W, step):
-            y_end = min(y + patch_size, H)
-            x_end = min(x + patch_size, W)
-            y_start = max(y_end - patch_size, 0)
-            x_start = max(x_end - patch_size, 0)
-
-            patch = image[:, y_start:y_end, x_start:x_end]
-            ph, pw = patch.shape[1], patch.shape[2]
-
-            if ph < patch_size or pw < patch_size:
-                padded = np.zeros((C, patch_size, patch_size), dtype=image.dtype)
-                padded[:, :ph, :pw] = patch
-                patch = padded
-
-            patches.append((patch, (y_start, x_start)))
-
-    return patches
-
-
-def tile_mask(
-    mask: np.ndarray,
-    patch_size: int = 256,
-    overlap: int = 32,
-) -> List[Tuple[np.ndarray, Tuple[int, int]]]:
-    """
-    Tile a ``(H, W)`` label mask into overlapping patches, matching
-    :func:`tile_image`.
-    """
-    H, W = mask.shape
-    step = patch_size - overlap
-    patches: List[Tuple[np.ndarray, Tuple[int, int]]] = []
-
-    for y in range(0, H, step):
-        for x in range(0, W, step):
-            y_end = min(y + patch_size, H)
-            x_end = min(x + patch_size, W)
-            y_start = max(y_end - patch_size, 0)
-            x_start = max(x_end - patch_size, 0)
-
-            patch = mask[y_start:y_end, x_start:x_end]
-            ph, pw = patch.shape
-
-            if ph < patch_size or pw < patch_size:
-                padded = np.zeros((patch_size, patch_size), dtype=mask.dtype)
-                padded[:ph, :pw] = patch
-                patch = padded
-
-            patches.append((patch, (y_start, x_start)))
-
-    return patches
-
-
-def has_excessive_nodata(patch: np.ndarray, threshold: float = 0.5) -> bool:
-    """Return ``True`` if more than *threshold* fraction of pixels are NaN or zero."""
-    total = patch.size
-    nodata_count = np.count_nonzero(np.isnan(patch) | (patch == 0))
-    return (nodata_count / total) > threshold
-
-
-def has_excessive_cloud(
-    patch: np.ndarray,
-    blue_band_index: int = 0,
-    threshold: float = 0.5,
-    brightness_cutoff: float = 0.7,
-) -> bool:
-    """
-    Heuristic cloud check: flag patch if the blue band's high-brightness
-    fraction exceeds *threshold*.
-    """
-    blue = patch[blue_band_index].astype(np.float64)
-    b_min, b_max = np.nanmin(blue), np.nanmax(blue)
-    if b_max - b_min < 1e-10:
-        return False
-    blue_norm = (blue - b_min) / (b_max - b_min)
-    cloud_fraction = np.nanmean(blue_norm > brightness_cutoff)
-    return cloud_fraction > threshold
-
-
-def split_indices(
-    n: int,
-    train_ratio: float = 0.70,
-    val_ratio: float = 0.15,
-    seed: int = 42,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return shuffled index arrays for train / val / test splits."""
-    rng = np.random.default_rng(seed)
-    indices = rng.permutation(n)
-    n_train = int(n * train_ratio)
-    n_val = int(n * val_ratio)
-    return indices[:n_train], indices[n_train:n_train + n_val], indices[n_train + n_val:]
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def prepare_dataset(
-    input_dir: str,
+def generate_dataset(
     output_dir: str,
-    patch_size: int = 256,
-    overlap: int = 32,
+    num_patches: int = 200,
+    seed: int = SEED,
 ) -> None:
-    """
-    Process all image/mask pairs in *input_dir* and write ``.npy`` patches
-    to *output_dir*.
-
-    Expected layout of *input_dir*::
-
-        input_dir/
-            images/
-                scene_001.tif
-                scene_002.tif
-                ...
-            masks/
-                scene_001.tif
-                scene_002.tif
-                ...
-
-    Output layout::
-
-        output_dir/
-            train/
-                images/  patch_00000.npy ...
-                masks/   patch_00000.npy ...
-            val/
-                images/ ...
-                masks/  ...
-            test/
-                images/ ...
-                masks/  ...
-    """
-    input_path = Path(input_dir)
+    """Generer le dataset synthetique complet."""
+    rng = np.random.default_rng(seed)
     output_path = Path(output_dir)
+    patches_dir = output_path / "sample_patches"
+    patches_dir.mkdir(parents=True, exist_ok=True)
 
-    images_dir = input_path / "images"
-    masks_dir = input_path / "masks"
+    # Repartition : 80 positifs, 120 negatifs
+    num_positive = int(num_patches * 0.4)  # 80
+    num_negative = num_patches - num_positive  # 120
 
-    if not images_dir.exists():
-        raise FileNotFoundError(f"Images directory not found: {images_dir}")
-    if not masks_dir.exists():
-        raise FileNotFoundError(f"Masks directory not found: {masks_dir}")
+    # Repartition des negatifs : foret 40, agriculture 35, eau 25, urbain 20
+    num_forest = int(num_negative * 0.33)       # ~40
+    num_agriculture = int(num_negative * 0.29)   # ~35
+    num_water = int(num_negative * 0.21)         # ~25
+    num_urban = num_negative - num_forest - num_agriculture - num_water  # ~20
 
-    image_files = sorted(images_dir.glob("*.tif"))
-    print(f"Found {len(image_files)} image files")
+    print(f"Generation de {num_patches} patches ({num_positive} positifs, {num_negative} negatifs)")
+    print(f"  Positifs (orpaillage): {num_positive}")
+    print(f"  Foret: {num_forest}, Agriculture: {num_agriculture}, Eau: {num_water}, Urbain: {num_urban}")
 
-    all_image_patches: List[np.ndarray] = []
-    all_mask_patches: List[np.ndarray] = []
+    all_patches = []
+    all_labels = []
 
-    for img_file in image_files:
-        mask_file = masks_dir / img_file.name
-        if not mask_file.exists():
-            print(f"  WARNING: No mask for {img_file.name}, skipping")
-            continue
+    # Positifs (label = 1)
+    for i in range(num_positive):
+        patch = _generate_mining_patch(rng)
+        all_patches.append(patch)
+        all_labels.append(1)
+        if (i + 1) % 20 == 0:
+            print(f"  Positifs: {i + 1}/{num_positive}")
 
-        # Read image
-        with rasterio.open(img_file) as src:
-            image = src.read().astype(np.float32)  # (C, H, W)
+    # Negatifs (label = 0)
+    generators = (
+        [(_generate_forest_patch, num_forest, "foret")],
+    )
+    neg_configs = [
+        (_generate_forest_patch, num_forest, "foret"),
+        (_generate_agriculture_patch, num_agriculture, "agriculture"),
+        (_generate_water_patch, num_water, "eau"),
+        (_generate_urban_patch, num_urban, "urbain"),
+    ]
 
-        # Read mask
-        with rasterio.open(mask_file) as src:
-            mask = src.read(1).astype(np.uint8)  # (H, W)
+    for gen_func, count, name in neg_configs:
+        for i in range(count):
+            patch = gen_func(rng)
+            all_patches.append(patch)
+            all_labels.append(0)
+        print(f"  Negatifs ({name}): {count}")
 
-        print(f"  Processing {img_file.name}: image={image.shape}, mask={mask.shape}")
+    # Sauvegarder chaque patch en .npy
+    print(f"\nSauvegarde de {len(all_patches)} patches...")
+    for i, patch in enumerate(all_patches):
+        np.save(patches_dir / f"patch_{i:05d}.npy", patch)
 
-        # Tile
-        img_patches = tile_image(image, patch_size=patch_size, overlap=overlap)
-        msk_patches = tile_mask(mask, patch_size=patch_size, overlap=overlap)
+    # Creer le split train/val/test
+    indices = rng.permutation(len(all_patches))
+    n_train = int(len(all_patches) * 0.7)
+    n_val = int(len(all_patches) * 0.15)
 
-        assert len(img_patches) == len(msk_patches), (
-            f"Mismatch: {len(img_patches)} image patches vs {len(msk_patches)} mask patches"
-        )
+    train_idx = indices[:n_train].tolist()
+    val_idx = indices[n_train:n_train + n_val].tolist()
+    test_idx = indices[n_train + n_val:].tolist()
 
-        # Filter
-        accepted = 0
-        for (ip, _), (mp, _) in zip(img_patches, msk_patches):
-            if has_excessive_nodata(ip, threshold=0.5):
-                continue
-            if has_excessive_cloud(ip, blue_band_index=0, threshold=0.5):
-                continue
-            all_image_patches.append(ip)
-            all_mask_patches.append(mp)
-            accepted += 1
-
-        print(f"    Accepted {accepted}/{len(img_patches)} patches")
-
-    total = len(all_image_patches)
-    print(f"\nTotal accepted patches: {total}")
-
-    if total == 0:
-        print("No patches to save. Exiting.")
-        return
-
-    # Split
-    train_idx, val_idx, test_idx = split_indices(total)
-    splits = {
-        "train": train_idx,
-        "val": val_idx,
-        "test": test_idx,
+    # annotations.json
+    annotations = {
+        "total_patches": len(all_patches),
+        "num_channels": NUM_CHANNELS,
+        "patch_size": PATCH_SIZE,
+        "positive_count": num_positive,
+        "negative_count": num_negative,
+        "patches": [f"patch_{i:05d}.npy" for i in range(len(all_patches))],
+        "labels": all_labels,
+        "split": {
+            "train": train_idx,
+            "val": val_idx,
+            "test": test_idx,
+        },
+        "channel_names": [
+            "B02_Blue", "B03_Green", "B04_Red", "B05_RedEdge1",
+            "B06_RedEdge2", "B07_RedEdge3", "B08_NIR", "B11_SWIR1",
+            "B12_SWIR2", "NDVI", "VV_SAR", "VH_SAR",
+        ],
     }
 
-    for split_name, indices in splits.items():
-        split_img_dir = output_path / split_name / "images"
-        split_msk_dir = output_path / split_name / "masks"
-        split_img_dir.mkdir(parents=True, exist_ok=True)
-        split_msk_dir.mkdir(parents=True, exist_ok=True)
+    with open(patches_dir / "annotations.json", "w") as f:
+        json.dump(annotations, f, indent=2)
 
-        for j, idx in enumerate(indices):
-            np.save(split_img_dir / f"patch_{j:05d}.npy", all_image_patches[idx])
-            np.save(split_msk_dir / f"patch_{j:05d}.npy", all_mask_patches[idx])
+    print(f"  annotations.json sauvegarde")
+    print(f"  Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
 
-        print(f"  {split_name}: {len(indices)} patches saved to {split_img_dir.parent}")
+    # Generer preview.png (grille 4x4 RGB fausse couleur)
+    _generate_preview(all_patches, all_labels, patches_dir, rng)
 
-    print("Dataset preparation complete.")
+    print(f"\nDataset genere dans {patches_dir}")
+
+
+def _generate_preview(
+    patches: list[np.ndarray],
+    labels: list[int],
+    output_dir: Path,
+    rng: np.random.Generator,
+) -> None:
+    """Generer une grille 4x4 de patches en RGB fausse couleur (NIR, Red, Green)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [WARN] matplotlib non disponible - preview.png non genere")
+        return
+
+    # Selectionner 8 positifs + 8 negatifs
+    pos_idx = [i for i, l in enumerate(labels) if l == 1]
+    neg_idx = [i for i, l in enumerate(labels) if l == 0]
+    selected = list(rng.choice(pos_idx, min(8, len(pos_idx)), replace=False))
+    selected += list(rng.choice(neg_idx, min(8, len(neg_idx)), replace=False))
+
+    fig, axes = plt.subplots(4, 4, figsize=(16, 16))
+    fig.suptitle("Ge O'Miner - Dataset Preview (NIR-R-G False Color)", fontsize=16, fontweight="bold")
+
+    for ax_idx, (ax, patch_idx) in enumerate(zip(axes.flat, selected)):
+        patch = patches[patch_idx]
+        label = labels[patch_idx]
+
+        # Fausse couleur : NIR (ch6), Red (ch2), Green (ch1)
+        rgb = np.stack([patch[6], patch[2], patch[1]], axis=-1)
+        # Normaliser entre 0 et 1
+        rgb_min = rgb.min()
+        rgb_max = rgb.max()
+        if rgb_max > rgb_min:
+            rgb = (rgb - rgb_min) / (rgb_max - rgb_min)
+        else:
+            rgb = np.zeros_like(rgb)
+
+        ax.imshow(rgb)
+        label_text = "ORPAILLAGE" if label == 1 else "NEGATIF"
+        color = "red" if label == 1 else "green"
+        ax.set_title(f"#{patch_idx} - {label_text}", color=color, fontweight="bold")
+        ax.axis("off")
+
+    # Remplir les axes restants si moins de 16 patches
+    for ax in axes.flat[len(selected):]:
+        ax.axis("off")
+
+    plt.tight_layout()
+    preview_path = output_dir / "preview.png"
+    plt.savefig(preview_path, dpi=100, bbox_inches="tight")
+    plt.close()
+    print(f"  preview.png sauvegarde ({preview_path})")
 
 
 # ---------------------------------------------------------------------------
@@ -266,31 +337,39 @@ def prepare_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare training dataset for MineSpot SegFormer"
+        description="Ge O'Miner - Generateur de dataset synthetique pour SegFormer",
     )
     parser.add_argument(
-        "--input-dir", required=True,
-        help="Root directory containing images/ and masks/ sub-directories",
+        "--output-dir",
+        default=None,
+        help="Repertoire de sortie (default: ml/datasets/)",
     )
     parser.add_argument(
-        "--output-dir", required=True,
-        help="Output directory for the prepared .npy dataset",
+        "--num-patches",
+        type=int,
+        default=200,
+        help="Nombre total de patches a generer (default: 200)",
     )
     parser.add_argument(
-        "--patch-size", type=int, default=256,
-        help="Patch size in pixels (default: 256)",
-    )
-    parser.add_argument(
-        "--overlap", type=int, default=32,
-        help="Overlap between adjacent patches in pixels (default: 32)",
+        "--seed",
+        type=int,
+        default=SEED,
+        help="Graine aleatoire pour reproductibilite (default: 42)",
     )
 
     args = parser.parse_args()
-    prepare_dataset(
-        input_dir=args.input_dir,
-        output_dir=args.output_dir,
-        patch_size=args.patch_size,
-        overlap=args.overlap,
+
+    if args.output_dir is None:
+        # Detecter le repertoire par defaut
+        script_dir = Path(__file__).parent
+        output_dir = str(script_dir)
+    else:
+        output_dir = args.output_dir
+
+    generate_dataset(
+        output_dir=output_dir,
+        num_patches=args.num_patches,
+        seed=args.seed,
     )
 
 

@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minespotai-svc
+  namespace: geominer
+  labels:
+    app.kubernetes.io/name: minespotai-svc
+    app.kubernetes.io/component: ai
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8001
+      targetPort: 8001
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: minespotai-svc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minespotai-svc
+  namespace: geominer
+  labels:
+    app.kubernetes.io/name: minespotai-svc
+    app.kubernetes.io/component: ai
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minespotai-svc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minespotai-svc
+        app.kubernetes.io/component: ai
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: minespotai-svc
+          image: ghcr.io/geominer/minespotai-svc:latest
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: geominer-config
+            - secretRef:
+                name: geominer-secrets
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/geominerdb"
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+              # GPU si disponible (decommenter)
+              # nvidia.com/gpu: 1
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10

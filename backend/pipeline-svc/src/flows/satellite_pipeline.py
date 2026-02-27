@@ -18,6 +18,7 @@ import rasterio
 import structlog
 import torch
 from prefect import flow, task
+from prefect.deployments import Deployment
 from rasterio.features import shapes
 from rasterio.transform import from_bounds
 from shapely.geometry import mapping, shape
@@ -31,8 +32,8 @@ logger = structlog.get_logger(__name__)
 MINIO_BUCKET_RAW = "raw-satellite"
 MINIO_BUCKET_PROCESSED = "processed-satellite"
 MINIO_BUCKET_PREDICTIONS = "predictions"
-MINESPOTAI_BASE_URL = "http://minespotai-svc:8000"
-ALERTFLOW_BASE_URL = "http://alertflow-svc:8000"
+MINESPOTAI_BASE_URL = "http://minespotai-svc:8001"
+ALERTFLOW_BASE_URL = "http://alertflow-svc:8003"
 DEFAULT_PATCH_SIZE = 256
 DEFAULT_OVERLAP = 32
 DEFAULT_THRESHOLD = 0.5
@@ -43,7 +44,7 @@ DEFAULT_MIN_AREA = 100
 # Tasks
 # ---------------------------------------------------------------------------
 
-@task(name="download_sentinel", retries=2, retry_delay_seconds=30)
+@task(name="download_sentinel", retries=3, retry_delay_seconds=60)
 def download_sentinel(
     bbox: Tuple[float, float, float, float],
     date_range: Tuple[str, str],
@@ -333,7 +334,7 @@ def vectorize_predictions(
     return geojson
 
 
-@task(name="store_results", retries=2, retry_delay_seconds=10)
+@task(name="store_results", retries=3, retry_delay_seconds=60)
 def store_results(
     geojson: Dict[str, Any],
     metadata: Dict[str, Any],
@@ -511,3 +512,14 @@ if __name__ == "__main__":
         threshold=args.threshold,
         min_area=args.min_area,
     )
+
+
+def create_deployment():
+    """Creer le deploiement Prefect avec schedule cron."""
+    deployment = Deployment.build_from_flow(
+        flow=satellite_detection_pipeline,
+        name="satellite-detection-scheduled",
+        schedule={"cron": "0 6 */12 * *"},  # Toutes les 12h a 6h
+        tags=["satellite", "detection", "production"],
+    )
+    deployment.apply()

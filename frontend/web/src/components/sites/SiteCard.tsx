@@ -1,35 +1,37 @@
 'use client';
 
 /* ============================================
-   SiteCard - Site summary card
+   SiteCard - Carte site glassmorphic
+   avec hover 3D et confidence bar gradient
    ============================================ */
 
 import Link from 'next/link';
 import { MapPin } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { cn } from '@/lib/cn';
 import { SiteStatus, type MiningSite } from '@/types';
 
-/* ---------- status badge colours ---------- */
+/* ---------- badges statut sombres ---------- */
 
 const STATUS_STYLES: Record<string, string> = {
-  [SiteStatus.DETECTED]: 'bg-yellow-100 text-yellow-800',
-  [SiteStatus.CONFIRMED]: 'bg-orange-200 text-orange-900',
-  [SiteStatus.ACTIVE]: 'bg-red-100 text-red-800',
-  [SiteStatus.ESCALATED]: 'bg-red-200 text-red-900',
-  [SiteStatus.UNDER_OPERATION]: 'bg-orange-100 text-orange-800',
-  [SiteStatus.DISMANTLED]: 'bg-green-100 text-green-800',
-  [SiteStatus.REHABILITATED]: 'bg-emerald-100 text-emerald-800',
-  [SiteStatus.MONITORING]: 'bg-purple-100 text-purple-800',
+  [SiteStatus.DETECTED]: 'badge-high',
+  [SiteStatus.CONFIRMED]: 'badge-warning',
+  [SiteStatus.ACTIVE]: 'badge-critical',
+  [SiteStatus.ESCALATED]: 'badge-danger',
+  [SiteStatus.UNDER_OPERATION]: 'badge-medium',
+  [SiteStatus.DISMANTLED]: 'badge-success',
+  [SiteStatus.REHABILITATED]: 'badge-info',
+  [SiteStatus.MONITORING]: 'badge-info',
 };
 
 const STATUS_LABEL: Record<string, string> = {
-  [SiteStatus.DETECTED]: 'Detecte',
-  [SiteStatus.CONFIRMED]: 'Confirme',
+  [SiteStatus.DETECTED]: 'Détecté',
+  [SiteStatus.CONFIRMED]: 'Confirmé',
   [SiteStatus.ACTIVE]: 'Actif',
-  [SiteStatus.ESCALATED]: 'Escalade',
-  [SiteStatus.UNDER_OPERATION]: 'En operation',
-  [SiteStatus.DISMANTLED]: 'Demantele',
-  [SiteStatus.REHABILITATED]: 'Rehabilite',
+  [SiteStatus.ESCALATED]: 'Escaladé',
+  [SiteStatus.UNDER_OPERATION]: 'En opération',
+  [SiteStatus.DISMANTLED]: 'Démantelé',
+  [SiteStatus.REHABILITATED]: 'Réhabilité',
   [SiteStatus.MONITORING]: 'Surveillance',
 };
 
@@ -40,57 +42,60 @@ interface SiteCardProps {
   className?: string;
 }
 
-/* ---------- component ---------- */
+/* ---------- composant ---------- */
 
 export default function SiteCard({ site, className }: SiteCardProps) {
   const confidencePct = Math.round(site.ai_confidence_score * 100);
+  const fillClass =
+    confidencePct >= 80
+      ? 'ai-score-fill-high'
+      : confidencePct >= 50
+        ? 'ai-score-fill-medium'
+        : 'ai-score-fill-low';
 
   return (
     <Link href={`/sites/${site.id}`}>
-      <div className={cn('card-hover group', className)}>
-        {/* header */}
+      <motion.div
+        whileHover={{ scale: 1.02, rotateX: 2, rotateY: -2 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+        className={cn('glass-card-hover group', className)}
+      >
+        {/* En-tête */}
         <div className="flex items-start justify-between mb-3">
           <div>
-            <p className="font-semibold text-gray-900 group-hover:text-primary-700 transition-colors">
+            <p className="font-semibold text-geo-400 group-hover:text-gold-400 transition-colors">
               {site.name}
             </p>
-            <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+            <div className="flex items-center gap-1 text-xs text-geo-600 mt-0.5">
               <MapPin size={12} />
               {site.region}, {site.department}
             </div>
           </div>
-          <span className={cn('badge', STATUS_STYLES[site.status])}>
+          <span className={STATUS_STYLES[site.status]}>
             {STATUS_LABEL[site.status]}
           </span>
         </div>
 
-        {/* confidence bar */}
+        {/* Barre de confiance gradient */}
         <div className="mb-3">
           <div className="flex items-center justify-between text-xs mb-1">
-            <span className="text-gray-500">Confiance IA</span>
-            <span className="font-medium text-gray-700">{confidencePct}%</span>
+            <span className="text-geo-600">Confiance IA</span>
+            <span className="font-medium text-geo-400 mono">{confidencePct}%</span>
           </div>
-          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className="confidence-bar">
             <div
-              className={cn(
-                'h-full rounded-full transition-all',
-                confidencePct >= 80
-                  ? 'bg-primary-500'
-                  : confidencePct >= 50
-                    ? 'bg-warning-400'
-                    : 'bg-danger-400',
-              )}
+              className={fillClass}
               style={{ width: `${confidencePct}%` }}
             />
           </div>
         </div>
 
-        {/* details */}
-        <div className="flex items-center justify-between text-xs text-gray-500">
+        {/* Détails */}
+        <div className="flex items-center justify-between text-xs text-geo-600">
           <span>{site.area_hectares.toFixed(2)} ha</span>
-          <span>{new Date(site.detection_date).toLocaleDateString('fr-FR')}</span>
+          <span className="mono">{new Date(site.detection_date).toLocaleDateString('fr-FR')}</span>
         </div>
-      </div>
+      </motion.div>
     </Link>
   );
 }

@@ -3,7 +3,329 @@
 @tailwind utilities;
 
 /* ============================================
-   MapLibre GL Overrides
+   Ge O'Miner - Design System
+   Variables CSS - Theme sombre Geo
+   ============================================ */
+
+:root {
+  --bg-deep: #0A1628;
+  --bg-surface: #1e293b;
+  --bg-elevated: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-subtle: rgba(148, 163, 184, 0.12);
+  --gold: #F0A500;
+  --gold-light: #fbbf24;
+  --cyan: #06b6d4;
+  --violet: #8b5cf6;
+  --danger: #ef4444;
+  --glass-bg: rgba(30, 41, 59, 0.6);
+  --glass-border: rgba(148, 163, 184, 0.1);
+  --sidebar-bg: #0D1F3C;
+  --accent: #F0A500;
+}
+
+/* ============================================
+   Composants Glassmorphism
+   ============================================ */
+
+@layer components {
+  .glass-card {
+    @apply rounded-xl border p-6;
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-color: var(--glass-border);
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-300;
+  }
+
+  .glass-card-hover:hover {
+    background: rgba(30, 41, 59, 0.8);
+    border-color: rgba(148, 163, 184, 0.2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Bordure degrade animee */
+  .gradient-border {
+    @apply relative rounded-xl;
+  }
+
+  .gradient-border::before {
+    content: '';
+    @apply absolute inset-0 rounded-xl;
+    padding: 1px;
+    background: linear-gradient(135deg, var(--gold), var(--cyan), var(--violet));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* ============================================
+     Sidebar
+     ============================================ */
+
+  .sidebar-link {
+    @apply relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-geo-500 transition-all duration-200;
+  }
+
+  .sidebar-link:hover {
+    @apply text-geo-400;
+    background: rgba(251, 191, 36, 0.06);
+  }
+
+  .sidebar-link-active {
+    @apply sidebar-link text-gold-400;
+    background: rgba(251, 191, 36, 0.1);
+  }
+
+  .sidebar-link-active::before {
+    content: '';
+    @apply absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full;
+    background: var(--accent);
+    box-shadow: 0 0 12px 2px rgba(240, 165, 0, 0.5);
+  }
+
+  /* Scroll sidebar personnalise */
+  .sidebar-nav-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(251, 191, 36, 0.15) transparent;
+  }
+
+  .sidebar-nav-scroll::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .sidebar-nav-scroll::-webkit-scrollbar-thumb {
+    background: rgba(251, 191, 36, 0.15);
+    border-radius: 3px;
+  }
+
+  /* ============================================
+     Badges severite (sombres transparents)
+     ============================================ */
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide;
+  }
+
+  .badge-critical {
+    @apply badge;
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .badge-high {
+    @apply badge;
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+
+  .badge-medium {
+    @apply badge;
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+    border: 1px solid rgba(6, 182, 212, 0.3);
+  }
+
+  .badge-low {
+    @apply badge;
+    background: rgba(148, 163, 184, 0.12);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .badge-success {
+    @apply badge;
+    background: rgba(251, 191, 36, 0.15);
+    color: #fcd34d;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+  }
+
+  .badge-info {
+    @apply badge;
+    background: rgba(139, 92, 246, 0.15);
+    color: #a78bfa;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+  }
+
+  .badge-warning {
+    @apply badge;
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+
+  .badge-danger {
+    @apply badge;
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  /* ============================================
+     Barre de confiance IA
+     ============================================ */
+
+  .confidence-bar {
+    @apply h-2.5 rounded-full overflow-hidden;
+    background: rgba(15, 23, 42, 0.6);
+  }
+
+  .ai-score-fill-high {
+    @apply h-full rounded-full transition-all duration-700;
+    background: linear-gradient(90deg, #fbbf24, #fcd34d);
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+  }
+
+  .ai-score-fill-medium {
+    @apply h-full rounded-full transition-all duration-700;
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+  }
+
+  .ai-score-fill-low {
+    @apply h-full rounded-full transition-all duration-700;
+    background: linear-gradient(90deg, #ef4444, #f87171);
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+  }
+
+  /* ============================================
+     Boutons
+     ============================================ */
+
+  .btn-primary {
+    @apply px-4 py-2.5 rounded-lg font-medium text-sm text-white transition-all duration-200;
+    background: linear-gradient(135deg, #fbbf24, #d97706);
+    box-shadow: 0 0 16px rgba(251, 191, 36, 0.3);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 24px rgba(251, 191, 36, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0);
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .btn-secondary:hover {
+    background: var(--bg-elevated);
+    border-color: var(--text-muted);
+  }
+
+  .btn-danger {
+    @apply px-4 py-2.5 rounded-lg font-medium text-sm text-white transition-all duration-200;
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.3);
+  }
+
+  .btn-danger:hover {
+    box-shadow: 0 0 24px rgba(239, 68, 68, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .btn-ghost {
+    @apply px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200;
+    color: var(--text-secondary);
+    background: transparent;
+  }
+
+  .btn-ghost:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  /* ============================================
+     Utilitaires
+     ============================================ */
+
+  .stat-value {
+    font-variant-numeric: tabular-nums;
+    @apply text-2xl font-bold;
+  }
+
+  .mono {
+    font-family: var(--font-jetbrains), 'JetBrains Mono', monospace;
+  }
+
+  /* Card legacy - redirige vers glass */
+  .card {
+    @apply glass-card;
+  }
+
+  .card-hover {
+    @apply glass-card-hover;
+  }
+
+  .stat-card {
+    @apply glass-card flex flex-col gap-2;
+  }
+
+  /* ============================================
+     Inputs et formulaires
+     ============================================ */
+
+  .input-field {
+    @apply w-full px-3 py-2.5 rounded-lg text-sm transition-all duration-200 outline-none;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+  }
+
+  .input-field:focus {
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.08);
+  }
+
+  .input-field::placeholder {
+    color: var(--text-muted);
+  }
+}
+
+/* ============================================
+   Scrollbar sombre
+   ============================================ */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-elevated) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--bg-elevated);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+/* ============================================
+   MapLibre GL Dark Overrides
    ============================================ */
 
 .maplibregl-map {
@@ -11,19 +333,46 @@
 }
 
 .maplibregl-popup-content {
-  @apply rounded-lg shadow-lg border border-gray-200 p-3 text-sm;
+  background: rgba(30, 41, 59, 0.95) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.15) !important;
+  border-radius: 12px !important;
+  padding: 12px !important;
+  color: #f1f5f9 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
 }
 
 .maplibregl-popup-close-button {
-  @apply text-gray-400 hover:text-gray-600 text-lg px-2 py-1;
+  color: #94a3b8 !important;
+  font-size: 18px !important;
+  padding: 4px 8px !important;
+}
+
+.maplibregl-popup-close-button:hover {
+  color: #f1f5f9 !important;
+  background: transparent !important;
+}
+
+.maplibregl-popup-tip {
+  border-top-color: rgba(30, 41, 59, 0.95) !important;
 }
 
 .maplibregl-ctrl-group {
-  @apply rounded-lg shadow-md border border-gray-200 !important;
+  background: rgba(30, 41, 59, 0.9) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(148, 163, 184, 0.15) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
 }
 
 .maplibregl-ctrl-group button {
-  @apply w-8 h-8 !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+.maplibregl-ctrl-group button+button {
+  border-top-color: rgba(148, 163, 184, 0.1) !important;
 }
 
 .maplibregl-marker {
@@ -31,96 +380,323 @@
 }
 
 /* ============================================
-   Custom Utility Classes
+   Recharts Dark Overrides
    ============================================ */
 
-@layer components {
-  .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+.recharts-cartesian-grid line {
+  stroke: rgba(148, 163, 184, 0.08) !important;
+}
+
+.recharts-text {
+  fill: #64748b !important;
+  font-size: 11px !important;
+}
+
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: rgba(30, 41, 59, 0.95) !important;
+  border: 1px solid rgba(148, 163, 184, 0.15) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+.recharts-tooltip-item {
+  color: #f1f5f9 !important;
+}
+
+.recharts-legend-item-text {
+  color: #94a3b8 !important;
+}
+
+/* ============================================
+   Animations utilitaires
+   ============================================ */
+
+.shimmer-bg {
+  background: linear-gradient(90deg,
+      rgba(51, 65, 85, 0.3) 25%,
+      rgba(71, 85, 105, 0.4) 50%,
+      rgba(51, 65, 85, 0.3) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
   }
 
-  .card-hover {
-    @apply card transition-shadow duration-200 hover:shadow-md;
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Glow shadows utilitaires */
+.shadow-glow-gold {
+  box-shadow: 0 0 20px 4px rgba(251, 191, 36, 0.25);
+}
+
+.shadow-glow-cyan {
+  box-shadow: 0 0 20px 4px rgba(6, 182, 212, 0.25);
+}
+
+.shadow-glow-violet {
+  box-shadow: 0 0 20px 4px rgba(139, 92, 246, 0.25);
+}
+
+.shadow-glow-danger {
+  box-shadow: 0 0 20px 4px rgba(239, 68, 68, 0.25);
+}
+
+
+.shadow-glass {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(148, 163, 184, 0.1);
+}
+
+/* ============================================
+   Keyframes - Particules flottantes (login)
+   ============================================ */
+
+@keyframes float-particle {
+
+  0%,
+  100% {
+    transform: translateY(0) translateX(0) scale(1);
+    opacity: 0.15;
   }
 
-  .btn-primary {
-    @apply bg-primary-600 text-white px-4 py-2 rounded-lg font-medium
-           hover:bg-primary-700 focus:outline-none focus:ring-2
-           focus:ring-primary-500 focus:ring-offset-2
-           transition-colors duration-150;
+  25% {
+    transform: translateY(-30px) translateX(10px) scale(1.2);
+    opacity: 0.3;
   }
 
-  .btn-secondary {
-    @apply bg-white text-gray-700 px-4 py-2 rounded-lg font-medium
-           border border-gray-300 hover:bg-gray-50
-           focus:outline-none focus:ring-2 focus:ring-primary-500
-           focus:ring-offset-2 transition-colors duration-150;
+  50% {
+    transform: translateY(-15px) translateX(-15px) scale(0.8);
+    opacity: 0.1;
   }
 
-  .btn-danger {
-    @apply bg-danger-600 text-white px-4 py-2 rounded-lg font-medium
-           hover:bg-danger-700 focus:outline-none focus:ring-2
-           focus:ring-danger-500 focus:ring-offset-2
-           transition-colors duration-150;
+  75% {
+    transform: translateY(-40px) translateX(5px) scale(1.1);
+    opacity: 0.25;
+  }
+}
+
+.animate-float-particle {
+  animation: float-particle 8s ease-in-out infinite;
+}
+
+/* ============================================
+   Keyframes - Effet brillance bouton
+   ============================================ */
+
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
   }
 
-  .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
-           font-medium text-gray-600 hover:bg-primary-50
-           hover:text-primary-700 transition-colors duration-150;
-  }
-
-  .sidebar-link-active {
-    @apply sidebar-link bg-primary-50 text-primary-700;
-  }
-
-  .stat-card {
-    @apply card flex flex-col gap-2;
-  }
-
-  .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
-  }
-
-  .badge-success {
-    @apply badge bg-primary-100 text-primary-800;
-  }
-
-  .badge-danger {
-    @apply badge bg-danger-100 text-danger-800;
-  }
-
-  .badge-warning {
-    @apply badge bg-warning-100 text-warning-800;
-  }
-
-  .badge-info {
-    @apply badge bg-blue-100 text-blue-800;
+  100% {
+    transform: translateX(200%);
   }
 }
 
 /* ============================================
-   Scrollbar Styling
+   Keyframes - Pulsation pour les alertes
    ============================================ */
 
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: #d1d5db transparent;
+@keyframes pulse-alert {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
 }
 
-.scrollbar-thin::-webkit-scrollbar {
-  width: 6px;
+.animate-pulse-alert {
+  animation: pulse-alert 2s ease-in-out infinite;
 }
 
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
+/* ============================================
+   Keyframes - Rotation pour le radar (login)
+   ============================================ */
+
+@keyframes radar-sweep {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #d1d5db;
-  border-radius: 3px;
+/* ============================================
+   Keyframes - Apparition progressive
+   ============================================ */
+
+@keyframes fade-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #9ca3af;
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s ease-out;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out;
+}
+
+/* ============================================
+   Keyframes - Lueur pulsante or
+   ============================================ */
+
+@keyframes glow-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 8px 2px rgba(240, 165, 0, 0.2);
+  }
+
+  50% {
+    box-shadow: 0 0 20px 6px rgba(240, 165, 0, 0.4);
+  }
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+/* ============================================
+   Keyframes - Scan line (login)
+   ============================================ */
+
+@keyframes scan-line-vertical {
+  0% {
+    top: -2px;
+  }
+
+  100% {
+    top: 100%;
+  }
+}
+
+/* ============================================
+   Selection personnalisee
+   ============================================ */
+
+::selection {
+  background: rgba(240, 165, 0, 0.3);
+  color: #f1f5f9;
+}
+
+::-moz-selection {
+  background: rgba(240, 165, 0, 0.3);
+  color: #f1f5f9;
+}
+
+/* ============================================
+   Keyframes — Mission Control Login
+   ============================================ */
+
+/* Nébuleuse qui respire (glow pulse sur aura logo) */
+@keyframes breath {
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.6;
+    transform: scale(1.1);
+  }
+}
+
+/* Carte Côte d'Ivoire stroke draw-in */
+@keyframes draw-in {
+  0% {
+    stroke-dashoffset: 2000;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-draw-in {
+  stroke-dasharray: 2000;
+  stroke-dashoffset: 2000;
+  animation: draw-in 2.5s ease-out 0.5s forwards;
+}
+
+/* Target ping — cercles expansifs type radar */
+@keyframes target-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+
+.animate-target-ping {
+  animation: target-ping 2.5s ease-out infinite;
+}
+
+/* Satellite orbite rotation */
+@keyframes orbit-dot {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-orbit-dot {
+  animation: orbit-dot 15s linear infinite;
+}
+
+/* Power-on — glow allumage bouton */
+@keyframes power-on {
+  0% {
+    box-shadow: 0 0 0 rgba(251, 191, 36, 0);
+  }
+
+  40% {
+    box-shadow: 0 0 30px rgba(251, 191, 36, 0.5);
+  }
+
+  100% {
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  }
+}
+
+.animate-power-on {
+  animation: power-on 1s ease-out 2s both;
 }

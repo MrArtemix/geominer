@@ -1,21 +1,38 @@
-FROM python:3.12-slim
+# =============================================================
+# Ge O'Miner - AquaGuard Service (port 8005)
+# Multi-stage build optimise
+# =============================================================
+FROM python:3.11-slim AS builder
 
-# Prevent Python from writing .pyc files and enable unbuffered output
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# --- Runtime ---
+FROM python:3.11-slim
+
+LABEL service="aquaguard-svc"
+LABEL maintainer="GeoSmart Africa"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1001 -m geominer
+
+COPY --from=builder /install /usr/local
 
 WORKDIR /app
+COPY src/ ./src/
 
-# Install dependencies first for better layer caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+USER geominer
+EXPOSE 8005
 
-# Copy application source
-COPY . .
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8005/health || exit 1
 
-EXPOSE 8003
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
-
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8005"]

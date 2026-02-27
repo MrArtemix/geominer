@@ -33,7 +33,7 @@ git clone <repo-url> geominer && cd geominer
 cp infra/docker/.env.example infra/docker/.env
 
 # 3. Lancer l'infrastructure
-docker compose -f infra/docker/docker-compose.yml up -d
+docker compose -f infra/docker/docker-compose.yml --profile core up -d
 
 # 4. Initialiser la base de donnees
 docker exec -i geominer-postgres psql -U geominer -d geominerdb < scripts/schema.sql

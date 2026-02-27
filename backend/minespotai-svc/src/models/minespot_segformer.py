@@ -405,3 +405,87 @@ def postprocess_mask(
         })
 
     return polygons
+
+
+# ---------------------------------------------------------------------------
+# Perte combinee Dice + Focal (classes desequilibrees)
+# ---------------------------------------------------------------------------
+
+class DiceFocalLoss(nn.Module):
+    """
+    Perte combinee Dice (0.5) + Focal (gamma=2.0, alpha=0.5).
+    Optimisee pour la detection de sites miniers (classes desequilibrees).
+    """
+
+    def __init__(self, dice_weight: float = 0.5, gamma: float = 2.0, alpha: float = 0.5):
+        super().__init__()
+        self.dice_weight = dice_weight
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        num_classes = logits.shape[1]
+
+        # Focal Loss
+        ce = F.cross_entropy(logits, targets, reduction='none')
+        pt = torch.exp(-ce)
+        focal_loss = (self.alpha * (1 - pt) ** self.gamma * ce).mean()
+
+        # Dice Loss
+        probs = F.softmax(logits, dim=1)
+        targets_oh = F.one_hot(targets, num_classes).permute(0, 3, 1, 2).float()
+        dims = (0, 2, 3)
+        intersection = (probs * targets_oh).sum(dim=dims)
+        union = probs.sum(dim=dims) + targets_oh.sum(dim=dims)
+        dice = (2.0 * intersection + 1.0) / (union + 1.0)
+        dice_loss = 1.0 - dice.mean()
+
+        return self.dice_weight * dice_loss + (1.0 - self.dice_weight) * focal_loss
+
+
+# ---------------------------------------------------------------------------
+# Inference sur un patch numpy
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def predict_patch(
+    model: MineSpotSegFormer,
+    patch: np.ndarray,
+    device: str | None = None,
+) -> dict:
+    """
+    Inference sur un patch numpy (12, H, W).
+
+    Retourne:
+        probability: ndarray (H, W) probabilite classe mining
+        binary: ndarray (H, W) masque binaire
+        confidence: float score de confiance moyen
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    tensor = torch.from_numpy(patch).float().unsqueeze(0).to(device)
+    logits = model(tensor)
+    probs = F.softmax(logits, dim=1)
+    mining_prob = probs[0, 1].cpu().numpy()
+    binary = (mining_prob >= 0.5).astype(np.uint8)
+    confidence = float(mining_prob[binary == 1].mean()) if binary.sum() > 0 else 0.0
+
+    return {
+        "probability": mining_prob,
+        "binary": binary,
+        "confidence": confidence,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prechauffage du modele
+# ---------------------------------------------------------------------------
+
+def warmup_model(model: MineSpotSegFormer, device: str | None = None) -> None:
+    """Dummy forward pass pour prechauffer le modele au demarrage."""
+    if device is None:
+        device = next(model.parameters()).device
+    dummy = torch.randn(1, 12, 256, 256, device=device)
+    with torch.no_grad():
+        model(dummy)

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routes.alerts import router as alerts_router
+from .routes.decisions import router as decisions_router
 
 structlog.configure(
     processors=[
@@ -63,4 +64,16 @@ def ready():
     return {"status": "ready"}
 
 
+# Prometheus metrics
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health", "/ready", "/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics")
+except ImportError:
+    pass
+
 app.include_router(alerts_router)
+app.include_router(decisions_router)

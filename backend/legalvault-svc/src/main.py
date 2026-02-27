@@ -1,14 +1,16 @@
 """
-LegalVault Service - IPFS & evidence hashing for legal mining evidence.
+LegalVault Service - Stockage de preuves avec IPFS, MinIO et blockchain.
 
-Provides endpoints for uploading evidence files, computing cryptographic
-hashes, storing files in MinIO (S3-compatible), generating simulated IPFS
-CIDs, and verifying file integrity.
+Upload de fichiers de preuves avec hash SHA-256, stockage sur IPFS (ou MinIO),
+enregistrement sur la blockchain, et verification d'integrite.
 """
+
+import os
 
 import structlog
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,19 +18,21 @@ from minio import Minio
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://geominer:geominer_secret_2024@postgres:5432/geominerdb"
+    database_url: str = "postgresql://geominer:geominer2026@postgres:5432/geominerdb"
     minio_endpoint: str = "minio:9000"
-    minio_access_key: str = "geominer-admin"
-    minio_secret_key: str = "minio_secret_2024"
+    minio_access_key: str = "geominer"
+    minio_secret_key: str = "geominer2026"
     minio_secure: bool = False
     minio_bucket: str = "evidence"
+    ipfs_api_url: str = "http://ipfs:5001/api/v0"
+    use_ipfs_fallback_minio: bool = True
+    goldtrack_url: str = "http://goldtrack-svc:8004"
     service_name: str = "legalvault-svc"
     host: str = "0.0.0.0"
-    port: int = 8005
+    port: int = 8007
     debug: bool = False
 
-    class Config:
-        env_prefix = "LEGALVAULT_"
+    model_config = {"env_prefix": "", "env_file": ".env"}
 
 
 settings = Settings()
@@ -48,7 +52,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
-    """Dependency that provides a database session."""
+    """Dependance FastAPI pour session DB."""
     db = SessionLocal()
     try:
         yield db
@@ -57,7 +61,7 @@ def get_db():
 
 
 def get_minio_client() -> Minio:
-    """Create and return a MinIO client instance."""
+    """Creer un client MinIO."""
     return Minio(
         settings.minio_endpoint,
         access_key=settings.minio_access_key,
@@ -67,42 +71,52 @@ def get_minio_client() -> Minio:
 
 
 def _ensure_bucket(client: Minio, bucket: str):
-    """Create the evidence bucket if it does not exist."""
+    """Creer le bucket evidence s'il n'existe pas."""
     if not client.bucket_exists(bucket):
         client.make_bucket(bucket)
-        logger.info("minio_bucket_created", bucket=bucket)
+        logger.info("minio_bucket_cree", bucket=bucket)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("legalvault_starting", port=settings.port)
-    # Ensure the evidence bucket exists on startup
+    logger.info("legalvault_demarrage", port=settings.port)
     try:
         minio_client = get_minio_client()
         _ensure_bucket(minio_client, settings.minio_bucket)
     except Exception as exc:
-        logger.warning("minio_init_failed", error=str(exc))
+        logger.warning("minio_init_echec", error=str(exc))
     yield
-    logger.info("legalvault_shutting_down")
+    logger.info("legalvault_arret")
 
 
 app = FastAPI(
     title="LegalVault Service",
-    description="Evidence hashing, IPFS CID generation, and file integrity verification for legal mining data.",
+    description="Stockage de preuves avec hachage SHA-256, IPFS, MinIO et blockchain.",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 @app.get("/health", tags=["health"])
 async def health():
-    """Health check endpoint."""
+    """Healthcheck du service LegalVault."""
     return {"status": "healthy", "service": settings.service_name}
 
 
-# ------------------------------------------------------------------
-# Register evidence routes
-# ------------------------------------------------------------------
+@app.get("/ready", tags=["health"])
+async def ready():
+    return {"status": "ready"}
+
+
+# Enregistrement des routes evidence
 from src.routes.evidence import router as evidence_router  # noqa: E402
 
 app.include_router(evidence_router)

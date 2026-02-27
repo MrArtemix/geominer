@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geominer-config
+  namespace: geominer
+  labels:
+    app.kubernetes.io/name: geominer
+data:
+  # PostgreSQL
+  POSTGRES_DB: "geominerdb"
+  POSTGRES_PORT: "5432"
+  POSTGRES_MULTIPLE_DATABASES: "geominerdb,keycloakdb,mlflowdb"
+
+  # Redis
+  REDIS_PORT: "6379"
+  REDIS_MAXMEMORY: "512mb"
+
+  # MinIO
+  MINIO_PORT: "9000"
+  MINIO_CONSOLE_PORT: "9001"
+  MINIO_SECURE: "false"
+
+  # Keycloak
+  KEYCLOAK_PORT: "8080"
+  KEYCLOAK_REALM: "geominer"
+  KEYCLOAK_CLIENT_ID: "geominer-api"
+  KEYCLOAK_URL: "http://keycloak:8080"
+
+  # MQTT
+  MQTT_PORT: "1883"
+  MQTT_BROKER: "mosquitto"
+
+  # Prefect
+  PREFECT_PORT: "4200"
+  PREFECT_API_URL: "http://prefect-server:4200/api"
+
+  # MLflow
+  MLFLOW_PORT: "5000"
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  MLFLOW_MODEL_NAME: "MineSpotSegFormer"
+
+  # Service URLs
+  DATABASE_URL: "postgresql://geominer:$(POSTGRES_PASSWORD)@postgres:5432/geominerdb"
+  REDIS_URL: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+  MINIO_ENDPOINT: "minio:9000"
+
+  # API Gateway
+  API_GATEWAY_PORT: "8000"
+  MINESPOTAI_PORT: "8001"
+  ALERTFLOW_PORT: "8002"
+  AQUAGUARD_PORT: "8003"
+  GOLDTRACK_PORT: "8004"
+  LEGALVAULT_PORT: "8005"
+
+  # Feature Flags
+  USE_MOCK_BLOCKCHAIN: "false"
+  USE_IPFS_FALLBACK_MINIO: "true"
+  ENABLE_REAL_SENTINEL: "true"
